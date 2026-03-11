@@ -137,3 +137,9 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# hookflow runtime state (generated per session)
+.claude/hookflow-state/
+
+# local sandbox
+my-local/
