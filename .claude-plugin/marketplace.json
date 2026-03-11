@@ -1,0 +1,12 @@
+{
+  "name": "claude-code-hookflow",
+  "owner": {
+    "name": "mashiike"
+  },
+  "plugins": [
+    {
+      "name": "claude-code-hookflow",
+      "source": "./plugins/hookflow"
+    }
+  ]
+}
