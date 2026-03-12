@@ -6,30 +6,34 @@ tasks:
       - task --list
 
   build:
-    desc: Build the hookflow binary
+    desc: Build the hookflow bundle
     cmds:
-      - go build -o plugins/hookflow/bin/claude-code-hookflow .
+      - npm run build
 
   test:
     desc: Run tests
     cmds:
-      - go test -race ./... -timeout 30s
+      - npm test
 
   lint:
-    desc: Run golangci-lint
+    desc: Run ESLint
     cmds:
-      - golangci-lint run ./...
+      - npm run lint
 
   fmt:
     desc: Format code
     cmds:
-      - gofmt -s -w .
-      - goimports -w .
+      - npm run fmt
+
+  typecheck:
+    desc: Run TypeScript type checking
+    cmds:
+      - npm run typecheck
 
   clean:
     desc: Remove build artifacts
     cmds:
-      - rm -f plugins/hookflow/bin/claude-code-hookflow
+      - rm -rf plugins/hookflow/dist/
 
   install-local:
     desc: Build and install hooks into .claude/settings.local.json

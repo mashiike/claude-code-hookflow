@@ -1,12 +1,8 @@
-# Build output
-bin/
-dist/
-plugins/hookflow/bin/
+# Dependencies
+node_modules/
 
-# Go
-*.exe
-*.test
-*.out
+# Build output (local dev; CI commits plugins/hookflow/dist/)
+plugins/hookflow/dist/
 
 # OS
 .DS_Store
@@ -20,5 +16,3 @@ plugins/hookflow/bin/
 
 # local sandbox
 my-local/
-
-claude-code-hookflow

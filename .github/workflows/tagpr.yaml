@@ -11,9 +11,7 @@ on:
 
 permissions:
   pull-requests: write
-  packages: write
   contents: write
-  actions: write
 
 jobs:
   tagpr:
@@ -21,29 +19,41 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: true
           ref: ${{ inputs.tag || github.ref }}
+
       - id: tagpr
-        uses: Songmu/tagpr@75738aa2880a03a1036bc5bd90ef49853427ec65 # v1
+        uses: Songmu/tagpr@b3fb89424646b06c8aa460f50307c60b6a541425 # v1
         if: ${{ github.event_name != 'workflow_dispatch' }}
-      - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          go-version: "1.25"
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
+          node-version: "20"
+
+      # On release PR phase: build and commit dist/
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ fromJSON(steps.tagpr.outputs.pull_request).head.ref }}
           fetch-depth: 0
         if: ${{ steps.tagpr.outputs.tag == '' && github.event_name != 'workflow_dispatch' }}
-      - uses: mashiike/action-gocredits@d2bc7fc94c93a27761800f03408ca00c3e9b3e85 # v0
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build dist
         if: ${{ steps.tagpr.outputs.tag == '' && github.event_name != 'workflow_dispatch' }}
-      - name: Run Go Releaser
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
-        if: ${{ steps.tagpr.outputs.tag != '' || github.event_name == 'workflow_dispatch' }}
-        with:
-          version: latest
-          args: release
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit dist if changed
+        if: ${{ steps.tagpr.outputs.tag == '' && github.event_name != 'workflow_dispatch' }}
+        run: |
+          if git diff --quiet plugins/hookflow/dist/; then
+            echo "No changes to dist/"
+          else
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            git add plugins/hookflow/dist/
+            git commit -m "build: update dist/"
+            git push
+          fi

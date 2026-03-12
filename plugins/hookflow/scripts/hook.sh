@@ -3,10 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "${SCRIPT_DIR}")}"
-HOOKFLOW_BIN="${PLUGIN_ROOT}/bin/claude-code-hookflow"
+HOOKFLOW_ENTRY="${PLUGIN_ROOT}/dist/index.js"
 
-if [ ! -x "${HOOKFLOW_BIN}" ]; then
+if [ ! -f "${HOOKFLOW_ENTRY}" ]; then
   exit 0
 fi
 
-exec "${HOOKFLOW_BIN}" "$@"
+exec node "${HOOKFLOW_ENTRY}" "$@"
