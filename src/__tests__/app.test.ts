@@ -128,15 +128,69 @@ describe('App', () => {
 
   describe('Stop', () => {
     it('skips when stop_hook_active is true', () => {
-      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test' }));
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
       app.run(
         makeInput({
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: '/tmp/a.ts' },
+          tool_input: { file_path: path.join(tmpDir, 'a.ts') },
+          cwd: tmpDir,
         }),
       );
 
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: true, cwd: tmpDir }));
+
+      const state = readState(
+        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
+        resolver,
+      );
+      expect(state!.last_run).toBeUndefined();
+    });
+
+    it('records workflow execution when workflows match', () => {
+      const hookflowsDir = path.join(tmpDir, '.claude', 'hookflows');
+      fs.mkdirSync(hookflowsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(hookflowsDir, 'ts-check.yaml'),
+        `
+name: "TS Check"
+max_retries: 2
+triggers:
+  path_pattern:
+    include:
+      - "**/*.ts"
+jobs:
+  check:
+    command: "tsc --noEmit"
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src', 'index.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(
+        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
+        resolver,
+      );
+      expect(state!.last_run).toBeDefined();
+      expect(state!.last_run!.trigger).toBe('Stop');
+      expect(state!.last_run!.attempt).toBe(1);
+      expect(state!.last_run!.max_retries).toBe(2);
+      expect(state!.last_run!.workflows['TS Check']).toBeDefined();
+      expect(state!.last_run!.workflows['TS Check']!.status).toBe('success');
+      expect(state!.last_run!.workflows['TS Check']!.matched_files).toEqual(['src/index.ts']);
+      expect(state!.last_run!.workflows['TS Check']!.jobs['check']).toBeDefined();
+    });
+
+    it('logs no workflows when none defined', () => {
       const stderr: string[] = [];
       const originalWrite = process.stderr.write.bind(process.stderr);
       process.stderr.write = ((chunk: string | Buffer): boolean => {
@@ -145,36 +199,60 @@ describe('App', () => {
       }) as typeof process.stderr.write;
 
       try {
-        app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: true }));
-        expect(stderr.join('')).not.toContain('file(s) changed');
+        app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+        app.run(
+          makeInput({
+            hook_event_name: 'PostToolUse',
+            tool_name: 'Write',
+            tool_input: { file_path: path.join(tmpDir, 'a.ts') },
+            cwd: tmpDir,
+          }),
+        );
+        app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+        expect(stderr.join('')).toContain('no workflows defined');
       } finally {
         process.stderr.write = originalWrite;
       }
     });
+  });
 
-    it('logs when files changed and stop_hook_active is false', () => {
-      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test' }));
+  describe('TaskCompleted', () => {
+    it('records workflow execution', () => {
+      const hookflowsDir = path.join(tmpDir, '.claude', 'hookflows');
+      fs.mkdirSync(hookflowsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(hookflowsDir, 'go-fmt.yaml'),
+        `
+name: "Go Format"
+triggers:
+  path_pattern:
+    include:
+      - "**/*.go"
+jobs:
+  fmt:
+    command: "gofmt -w ."
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
       app.run(
         makeInput({
           hook_event_name: 'PostToolUse',
           tool_name: 'Write',
-          tool_input: { file_path: '/tmp/a.ts' },
+          tool_input: { file_path: path.join(tmpDir, 'main.go') },
+          cwd: tmpDir,
         }),
       );
+      app.run(makeInput({ hook_event_name: 'TaskCompleted', cwd: tmpDir }));
 
-      const stderr: string[] = [];
-      const originalWrite = process.stderr.write.bind(process.stderr);
-      process.stderr.write = ((chunk: string | Buffer): boolean => {
-        stderr.push(chunk.toString());
-        return true;
-      }) as typeof process.stderr.write;
-
-      try {
-        app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false }));
-        expect(stderr.join('')).toContain('1 file(s) changed');
-      } finally {
-        process.stderr.write = originalWrite;
-      }
+      const state = readState(
+        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
+        resolver,
+      );
+      expect(state!.last_run).toBeDefined();
+      expect(state!.last_run!.trigger).toBe('TaskCompleted');
+      expect(state!.last_run!.workflows['Go Format']!.status).toBe('success');
+      expect(state!.last_run!.workflows['Go Format']!.matched_files).toEqual(['main.go']);
     });
   });
 

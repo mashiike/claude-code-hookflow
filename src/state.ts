@@ -7,15 +7,27 @@ export interface PromptInfo {
   started_at: string;
 }
 
-export interface WorkflowResult {
-  outcome: string;
-  conclusion: string;
+export interface JobExecution {
+  status: 'success' | 'failure' | 'skipped';
+  started_at?: string;
+  finished_at?: string;
+  exit_code?: number;
 }
 
-export interface RunResult {
+export interface WorkflowExecution {
+  file: string;
+  status: 'success' | 'failure' | 'skipped';
+  matched_files: string[];
+  jobs: Record<string, JobExecution>;
+}
+
+export interface RunRecord {
   trigger: string;
-  workflows?: Record<string, WorkflowResult>;
-  retries: number;
+  attempt: number;
+  max_retries: number;
+  started_at: string;
+  finished_at?: string;
+  workflows: Record<string, WorkflowExecution>;
 }
 
 export interface State {
@@ -23,7 +35,7 @@ export interface State {
   cwd: string;
   changed_files: string[];
   current_prompt?: PromptInfo;
-  last_run?: RunResult;
+  last_run?: RunRecord;
 }
 
 export type StatePathResolver = (event: HookEvent) => string;

@@ -1,0 +1,17 @@
+name: "TypeScript Check"
+max_retries: 3
+
+triggers:
+  path_pattern:
+    include:
+      - "src/**/*.ts"
+    exclude:
+      - "src/**/*.test.ts"
+
+jobs:
+  typecheck:
+    command: "npm run typecheck"
+  lint:
+    command: "npm run lint"
+  test:
+    command: "npm test"

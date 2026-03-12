@@ -1,7 +1,10 @@
 import { parseHookEvent } from './hook-event.js';
+
 import type { HookEvent } from './hook-event.js';
 import { readState, writeState, removeState } from './state.js';
-import type { State, StatePathResolver } from './state.js';
+import type { State, StatePathResolver, RunRecord, WorkflowExecution, JobExecution } from './state.js';
+import { loadWorkflows, matchWorkflow } from './workflow.js';
+import type { Workflow } from './workflow.js';
 
 export class App {
   private statePathResolver?: StatePathResolver;
@@ -23,6 +26,9 @@ export class App {
       case 'Stop':
         this.handleStop(event);
         break;
+      case 'TaskCompleted':
+        this.handleTaskCompleted(event);
+        break;
       case 'SessionEnd':
         this.handleSessionEnd(event);
         break;
@@ -43,6 +49,9 @@ export class App {
 
   private handleUserPromptSubmit(event: HookEvent): void {
     const state = this.loadOrCreateState(event);
+
+    state.session_id = event.session_id;
+    state.cwd = event.cwd;
 
     const prompt = (event._raw as Record<string, unknown>).prompt;
 
@@ -76,7 +85,14 @@ export class App {
     if (event.stop_hook_active) {
       return;
     }
+    this.runWorkflows(event, 'Stop');
+  }
 
+  private handleTaskCompleted(event: HookEvent): void {
+    this.runWorkflows(event, 'TaskCompleted');
+  }
+
+  private runWorkflows(event: HookEvent, trigger: string): void {
     let state: State | null = null;
     try {
       state = readState(event, this.statePathResolver);
@@ -88,9 +104,72 @@ export class App {
       return;
     }
 
-    // TODO: match changed files against workflow patterns and execute
+    const cwd = state.cwd || event.cwd;
+    const workflows = loadWorkflows(cwd);
+
+    if (workflows.length === 0) {
+      process.stderr.write(
+        `hookflow: ${state.changed_files.length} file(s) changed, no workflows defined\n`,
+      );
+      return;
+    }
+
+    const matched = new Map<string, { workflow: Workflow; files: string[] }>();
+    for (const w of workflows) {
+      const files = matchWorkflow(w, state.changed_files, cwd);
+      if (files.length > 0) {
+        matched.set(w.name, { workflow: w, files });
+      }
+    }
+
+    if (matched.size === 0) {
+      process.stderr.write(
+        `hookflow: ${state.changed_files.length} file(s) changed, no workflows matched\n`,
+      );
+      return;
+    }
+
+    const previousAttempt = state.last_run?.trigger === trigger ? state.last_run.attempt : 0;
+
+    const maxRetries = Math.max(...[...matched.values()].map((m) => m.workflow.max_retries));
+
+    const run: RunRecord = {
+      trigger,
+      attempt: previousAttempt + 1,
+      max_retries: maxRetries,
+      started_at: new Date().toISOString(),
+      workflows: {},
+    };
+
+    for (const [name, { workflow, files }] of matched) {
+      const workflowExec: WorkflowExecution = {
+        file: workflow._file,
+        status: 'success',
+        matched_files: files,
+        jobs: {},
+      };
+
+      for (const [jobKey, _jobDef] of Object.entries(workflow.jobs)) {
+        const jobExec: JobExecution = {
+          status: 'success',
+          started_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          exit_code: 0,
+        };
+        workflowExec.jobs[jobKey] = jobExec;
+      }
+
+      run.workflows[name] = workflowExec;
+    }
+
+    run.finished_at = new Date().toISOString();
+
+    state.last_run = run;
+    writeState(event, state, this.statePathResolver);
+
+    const workflowNames = [...matched.keys()].join(', ');
     process.stderr.write(
-      `hookflow: ${state.changed_files.length} file(s) changed, workflow execution not yet implemented\n`,
+      `hookflow: executed ${matched.size} workflow(s): ${workflowNames} (attempt ${run.attempt})\n`,
     );
   }
 
