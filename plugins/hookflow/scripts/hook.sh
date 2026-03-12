@@ -9,4 +9,9 @@ if [ ! -f "${HOOKFLOW_ENTRY}" ]; then
   exit 0
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "hookflow: node not found" >&2
+  exit 0
+fi
+
 exec node "${HOOKFLOW_ENTRY}" "$@"
