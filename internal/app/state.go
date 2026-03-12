@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 // State is the persistent state for a session.
 type State struct {
 	SessionID     string      `json:"session_id"`
+	CWD           string      `json:"cwd"`
 	ChangedFiles  []string    `json:"changed_files"`
 	CurrentPrompt *PromptInfo `json:"current_prompt,omitempty"`
 	LastRun       *RunResult  `json:"last_run,omitempty"`
@@ -70,7 +72,7 @@ func NewStateWriter(event *HookEvent, resolver StatePathResolver) (io.WriteClose
 	statePath := resolver(event)
 
 	dir := filepath.Dir(statePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 
@@ -89,7 +91,9 @@ func RemoveState(event *HookEvent, resolver StatePathResolver) error {
 	}
 
 	dir := filepath.Dir(statePath)
-	_ = os.Remove(dir)
+	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		slog.Warn("failed to remove state directory", "dir", dir, "error", err)
+	}
 
 	return nil
 }

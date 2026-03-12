@@ -39,8 +39,12 @@ func dumpInput(input []byte) {
 	if err := json.Unmarshal(input, &parsed); err != nil || parsed.CWD == "" {
 		return
 	}
-	dumpDir := filepath.Join(parsed.CWD, ".claude", "hookflow")
-	if err := os.MkdirAll(dumpDir, 0o755); err != nil {
+	cwd := filepath.Clean(parsed.CWD)
+	if !filepath.IsAbs(cwd) {
+		return
+	}
+	dumpDir := filepath.Join(cwd, ".claude", "hookflow")
+	if err := os.MkdirAll(dumpDir, 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "hookflow: failed to create dump dir: %v\n", err)
 		return
 	}
@@ -56,7 +60,7 @@ func dumpInput(input []byte) {
 
 	filename := fmt.Sprintf("dump_%s.json", time.Now().Format("20060102_150405.000"))
 	dumpPath := filepath.Join(dumpDir, filename)
-	if err := os.WriteFile(dumpPath, formatted, 0o644); err != nil {
+	if err := os.WriteFile(dumpPath, formatted, 0o600); err != nil { //nolint:gosec // G703: cwd is provided by Claude Code hook system, not arbitrary user input
 		fmt.Fprintf(os.Stderr, "hookflow: failed to write dump: %v\n", err)
 		return
 	}

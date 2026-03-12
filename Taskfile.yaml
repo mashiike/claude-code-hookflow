@@ -1,0 +1,62 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  build:
+    desc: Build the hookflow binary
+    cmds:
+      - go build -o plugins/hookflow/bin/claude-code-hookflow .
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -race ./... -timeout 30s
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - gofmt -s -w .
+      - goimports -w .
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f plugins/hookflow/bin/claude-code-hookflow
+
+  install-local:
+    desc: Build and install hooks into .claude/settings.local.json
+    cmds:
+      - task: build
+      - |
+        SETTINGS=".claude/settings.local.json"
+        HOOK_CMD="{{.ROOT_DIR}}/plugins/hookflow/scripts/hook.sh"
+        HOOKS=$(jq --arg cmd "$HOOK_CMD" \
+          '.hooks | walk(if type == "string" and test("\\$\\{CLAUDE_PLUGIN_ROOT\\}") then gsub("\\$\\{CLAUDE_PLUGIN_ROOT\\}"; $cmd | gsub("/scripts/hook.sh$"; "")) else . end)' \
+          plugins/hookflow/hooks/hooks.json)
+        if [ -f "$SETTINGS" ]; then
+          jq --argjson hooks "$HOOKS" '.hooks = $hooks' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+        else
+          mkdir -p .claude
+          jq -n --argjson hooks "$HOOKS" '{hooks: $hooks}' > "$SETTINGS"
+        fi
+        echo "hooks installed to $SETTINGS"
+
+  uninstall-local:
+    desc: Remove hooks from .claude/settings.local.json
+    cmds:
+      - |
+        SETTINGS=".claude/settings.local.json"
+        if [ ! -f "$SETTINGS" ]; then
+          echo "no settings file found"
+          exit 0
+        fi
+        jq 'del(.hooks)' "$SETTINGS" > "${SETTINGS}.tmp" && mv "${SETTINGS}.tmp" "$SETTINGS"
+        echo "hooks removed from $SETTINGS"

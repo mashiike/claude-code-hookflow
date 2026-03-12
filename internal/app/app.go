@@ -37,9 +37,12 @@ func (app *App) Run(ctx context.Context, input []byte) error {
 }
 
 func (app *App) handleUserPromptSubmit(_ context.Context, event *HookEvent) error {
-	state, _ := app.loadState(event)
+	state, err := app.loadState(event)
+	if err != nil {
+		state = nil
+	}
 	if state == nil {
-		state = &State{SessionID: event.SessionID}
+		state = &State{SessionID: event.SessionID, CWD: event.CWD}
 	}
 
 	var detail struct {
@@ -65,9 +68,12 @@ func (app *App) handlePostToolUse(_ context.Context, event *HookEvent) error {
 		return nil
 	}
 
-	state, _ := app.loadState(event)
+	state, err := app.loadState(event)
+	if err != nil {
+		state = nil
+	}
 	if state == nil {
-		state = &State{SessionID: event.SessionID}
+		state = &State{SessionID: event.SessionID, CWD: event.CWD}
 	}
 
 	if slices.Contains(state.ChangedFiles, filePath) {
