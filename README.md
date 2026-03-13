@@ -20,8 +20,6 @@ stop_reason: "TypeScript checks failed, please fix before proceeding"
 
 paths:
   - "src/**/*.ts"
-paths-ignore:
-  - "src/**/*.test.ts"
 
 jobs:
   typecheck:
@@ -59,6 +57,66 @@ That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the ch
 - `continue: false` (default) — failure blocks Claude from stopping
 - `continue: true` — failure is reported but doesn't block
 
+## Template Expressions
+
+Use `${{ }}` in `run` and `working_dir` fields to reference runtime context.
+
+```yaml
+jobs:
+  fmt:
+    steps:
+      - run: npx prettier --write ${{ matched_files }}
+      - run: go test --short ${{ matched_dirs }}
+      - name: lint
+        run: npm run lint
+        continue: true
+      - run: echo "lint exited ${{ steps.lint.exit_code }}"
+        if: "${{ steps.lint.exit_code != '0' }}"
+```
+
+### Available context
+
+| Expression | Description |
+|-----------|-------------|
+| `${{ state.changed_files }}` | All changed files (space-separated) |
+| `${{ state.changed_dirs }}` | Unique directories of changed files (trailing `/`) |
+| `${{ state.trigger }}` | `"Stop"` or `"TaskCompleted"` |
+| `${{ state.cwd }}` | Working directory |
+| `${{ state.prompt }}` | Current user prompt |
+| `${{ matched_files }}` | Files matching this workflow's paths |
+| `${{ matched_dirs }}` | Unique directories of matched files |
+| `${{ each.value }}` | Current value in `each` loop |
+| `${{ workflow.name }}` | Workflow name |
+| `${{ steps.<name>.exit_code }}` | Previous named step's exit code |
+| `${{ steps.<name>.stdout }}` | Previous named step's stdout |
+| `${{ steps.<name>.stderr }}` | Previous named step's stderr |
+
+### Step conditions
+
+```yaml
+steps:
+  - run: echo "only on Stop"
+    if: "${{ state.trigger == 'Stop' }}"
+```
+
+Supports `==`, `!=` (string comparison), and bare truthiness check.
+
+## Job `each` Loop
+
+Iterate a job over changed files or directories:
+
+```yaml
+# Run terraform fmt in each changed directory
+jobs:
+  fmt:
+    each: matched_dirs
+    steps:
+      - run: terraform fmt
+        working_dir: ${{ each.value }}
+```
+
+Valid `each` values: `matched_files`, `matched_dirs`, `changed_files`, `changed_dirs`.
+
 ## Workflow YAML Reference
 
 ### Top-level fields
@@ -79,6 +137,7 @@ That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the ch
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
 | `steps` | step[] | yes | — |
+| `each` | string | no | — |
 | `needs` | string / string[] | no | `[]` |
 | `continue` | boolean | no | — |
 | `stop_reason` | string | no | — |
@@ -88,6 +147,8 @@ That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the ch
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
 | `run` | string | yes | — |
+| `name` | string | no | — |
+| `if` | string | no | — |
 | `working_dir` | string | no | cwd |
 | `continue` | boolean | no | — |
 | `stop_reason` | string | no | — |
