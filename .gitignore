@@ -1,8 +1,7 @@
 # Dependencies
 node_modules/
 
-# Build output (local dev; CI commits plugins/hookflow/dist/)
-plugins/hookflow/dist/
+# Build output is committed for plugin distribution
 
 # OS
 .DS_Store
