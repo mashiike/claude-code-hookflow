@@ -29,10 +29,45 @@ Each key under `jobs` is the job identifier (e.g., `lint`, `test`, `build`).
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `run` | string | **yes** | — | Shell command to execute |
-| `working_dir` | string | no | cwd | Working directory, relative to project root |
+| `name` | string | no | — | Step identifier for `${{ steps.<name>.* }}` references |
+| `run` | string | **yes** | — | Shell command to execute. Supports `${{ }}` template expressions |
+| `if` | string | no | — | Condition expression. Step is skipped when it evaluates to false |
+| `working_dir` | string | no | cwd | Working directory, relative to project root. Supports `${{ }}` template expressions |
 | `continue` | boolean | no | — | Overrides job-level `continue` for this step |
 | `stop_reason` | string | no | — | Overrides job-level `stop_reason` for this step |
+
+## Template expressions
+
+Use `${{ }}` in `run` and `working_dir` fields to interpolate runtime context.
+
+### Available context
+
+| Expression | Type | Description |
+|-----------|------|-------------|
+| `state.changed_files` | string[] | All files changed since last prompt (space-separated when interpolated) |
+| `state.trigger` | string | `"Stop"` or `"TaskCompleted"` |
+| `state.session_id` | string | Current session ID |
+| `state.cwd` | string | Working directory |
+| `state.prompt` | string | Current user prompt text |
+| `matched_files` | string[] | Files matching this workflow's `paths` (space-separated when interpolated) |
+| `workflow.name` | string | Workflow display name |
+| `steps.<name>.exit_code` | number | Exit code of a previously executed named step |
+| `steps.<name>.stdout` | string | Standard output of a previously executed named step |
+| `steps.<name>.stderr` | string | Standard error of a previously executed named step |
+
+- Unknown variables resolve to empty string `""`.
+- Arrays are joined with spaces.
+- Numeric values are converted to string.
+
+### Conditions (`if` field)
+
+The `if` field supports:
+
+- **Equality**: `${{ state.trigger == 'Stop' }}` — string comparison
+- **Inequality**: `${{ steps.lint.exit_code != '0' }}`
+- **Truthiness**: `${{ state.prompt }}` — true if non-empty, non-"false", non-"0"
+
+Both `${{ expr }}` wrapped and bare `expr` forms are accepted. String literals can use single or double quotes.
 
 ## Failure configuration cascade
 
@@ -98,6 +133,8 @@ jobs:
 - stdout and stderr are captured and truncated to **4096 characters** in state.
 - On first `continue: false` failure, remaining steps in the job are skipped.
 - On `continue: true` failure, execution proceeds to the next step.
+- Skipped steps (via `if` condition) are recorded with `status: "skipped"`.
+- Step context (`steps.<name>.*`) is scoped per job and reset between jobs.
 
 ## File loading priority
 

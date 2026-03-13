@@ -16,12 +16,12 @@ Create workflow YAML files for the claude-code-hookflow plugin. Workflows define
 ## Quick reference
 
 ```yaml
-name: "Workflow Name"              # optional, defaults to filename
+name: "Workflow Name"              # required
 on: [Stop, TaskCompleted]          # optional, default: both
 paths:                             # required, glob patterns (minimatch)
   - "src/**/*.ts"
 paths-ignore:                      # optional
-  - "src/**/*.test.ts"
+  - "vendor/**"
 external_files: false              # optional, default: false
 continue: false                    # optional, default: false (block on failure)
 stop_reason: "Fix message"         # optional, shown to Claude on failure
@@ -32,13 +32,53 @@ jobs:
     continue: true                 # optional, overrides workflow-level
     stop_reason: "Job message"     # optional
     steps:
-      - run: "shell command"
+      - name: step-id             # optional, for ${{ steps.<name>.* }} reference
+        run: "shell command"
         working_dir: "subdir"      # optional, relative to cwd
+        if: "${{ expr }}"          # optional, skip step if false
         continue: false            # optional, overrides job-level
         stop_reason: "Step msg"    # optional
 ```
 
 For the full schema details, see [references/schema.md](references/schema.md).
+
+## Template expressions
+
+Use `${{ }}` syntax in `run` and `working_dir` fields to reference runtime context.
+
+### Available context
+
+| Expression | Type | Description |
+|-----------|------|-------------|
+| `${{ state.changed_files }}` | string[] | All files changed since last prompt (space-separated) |
+| `${{ state.trigger }}` | string | `"Stop"` or `"TaskCompleted"` |
+| `${{ state.session_id }}` | string | Current session ID |
+| `${{ state.cwd }}` | string | Working directory |
+| `${{ state.prompt }}` | string | Current user prompt text |
+| `${{ matched_files }}` | string[] | Files that matched this workflow's paths (space-separated) |
+| `${{ workflow.name }}` | string | Workflow name |
+| `${{ steps.<name>.exit_code }}` | number | Previous step's exit code |
+| `${{ steps.<name>.stdout }}` | string | Previous step's stdout |
+| `${{ steps.<name>.stderr }}` | string | Previous step's stderr |
+
+Arrays are joined with spaces when interpolated. Unknown variables resolve to empty string.
+
+### Conditions (`if`)
+
+Steps can have an `if` field to conditionally execute:
+
+```yaml
+steps:
+  - run: echo "only on Stop"
+    if: "${{ state.trigger == 'Stop' }}"
+  - name: lint
+    run: npm run lint
+    continue: true
+  - run: echo "lint failed"
+    if: "${{ steps.lint.exit_code != '0' }}"
+```
+
+Supported: `==`, `!=` (string comparison), or bare expression (truthiness check).
 
 ## Workflow creation process
 
@@ -64,8 +104,7 @@ name: "TypeScript Check"
 stop_reason: "TypeScript checks failed, please fix"
 paths:
   - "src/**/*.ts"
-paths-ignore:
-  - "src/**/*.test.ts"
+  - "src/**/*.tsx"
 jobs:
   typecheck:
     steps:
@@ -85,7 +124,6 @@ jobs:
 ```yaml
 name: "Go Checks"
 paths: "**/*.go"
-paths-ignore: "**/*_test.go"
 jobs:
   fmt:
     continue: true
@@ -105,7 +143,7 @@ jobs:
 ```yaml
 name: "Python Checks"
 paths: "**/*.py"
-paths-ignore: "tests/**"
+paths-ignore: "docs/**"
 jobs:
   lint:
     continue: true
@@ -118,4 +156,20 @@ jobs:
     needs: typecheck
     steps:
       - run: pytest
+```
+
+### Using template expressions
+
+```yaml
+name: "Format Changed Files"
+paths:
+  - "**/*.ts"
+jobs:
+  fmt:
+    steps:
+      - name: prettier
+        run: npx prettier --check ${{ matched_files }}
+        continue: true
+      - run: echo "prettier exit code: ${{ steps.prettier.exit_code }}"
+        if: "${{ steps.prettier.exit_code != '0' }}"
 ```

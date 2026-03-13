@@ -10,6 +10,8 @@ export interface FailureConfig {
 }
 
 export interface Step extends FailureConfig {
+  name?: string;
+  if?: string;
   run: string;
   working_dir?: string;
 }
@@ -33,6 +35,8 @@ export interface Workflow extends FailureConfig {
 const DEFAULT_EVENT_NAMES = ['Stop', 'TaskCompleted'];
 
 interface RawStep {
+  name?: string;
+  if?: string;
   run?: string;
   working_dir?: string;
   continue?: boolean;
@@ -107,6 +111,8 @@ function parseWorkflowFile(filePath: string): Workflow | null {
       for (const rawStep of def.steps) {
         if (rawStep && typeof rawStep.run === 'string') {
           steps.push({
+            name: typeof rawStep.name === 'string' ? rawStep.name : undefined,
+            if: typeof rawStep.if === 'string' ? rawStep.if : undefined,
             run: rawStep.run,
             working_dir: rawStep.working_dir,
             continue: parseBool(rawStep.continue),

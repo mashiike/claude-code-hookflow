@@ -14,6 +14,8 @@ import type {
 } from './state.js';
 import { loadWorkflows, matchWorkflow, resolveFailureConfig } from './workflow.js';
 import type { Workflow, JobDef } from './workflow.js';
+import { expandTemplate, evaluateCondition } from './template.js';
+import type { TemplateContext } from './template.js';
 
 export interface RunResult {
   exitCode: number;
@@ -171,8 +173,22 @@ export class App {
         jobs: {},
       };
 
+      const ctx: TemplateContext = {
+        state: {
+          changed_files: state.changed_files,
+          trigger,
+          session_id: state.session_id,
+          cwd,
+          prompt: state.current_prompt?.prompt ?? '',
+        },
+        workflow: { name },
+        matched_files: files,
+        steps: {},
+      };
+
       for (const [jobKey, jobDef] of Object.entries(workflow.jobs)) {
-        const jobExec: JobExecution = this.executeJob(jobDef, workflow, cwd);
+        ctx.steps = {};
+        const jobExec: JobExecution = this.executeJob(jobDef, workflow, cwd, ctx);
         workflowExec.jobs[jobKey] = jobExec;
       }
 
@@ -197,7 +213,12 @@ export class App {
     return this.buildRunResult(event, run);
   }
 
-  private executeJob(jobDef: JobDef, workflow: Workflow, cwd: string): JobExecution {
+  private executeJob(
+    jobDef: JobDef,
+    workflow: Workflow,
+    cwd: string,
+    ctx: TemplateContext,
+  ): JobExecution {
     const startedAt = new Date().toISOString();
     const stepResults: StepExecution[] = [];
     let jobExitCode = 0;
@@ -205,14 +226,36 @@ export class App {
 
     for (const step of jobDef.steps) {
       const stepStart = new Date().toISOString();
+
+      // Evaluate if condition
+      if (step.if !== undefined) {
+        if (!evaluateCondition(step.if, ctx)) {
+          stepResults.push({
+            name: step.name,
+            command: step.run,
+            status: 'skipped',
+            exit_code: 0,
+            started_at: stepStart,
+            finished_at: new Date().toISOString(),
+          });
+          continue;
+        }
+      }
+
+      // Expand templates
+      const expandedRun = expandTemplate(step.run, ctx);
+      const expandedWorkingDir = step.working_dir
+        ? expandTemplate(step.working_dir, ctx)
+        : undefined;
+
       let stdout = '';
       let stderr = '';
       let exitCode = 0;
 
-      const workingDir = step.working_dir ? path.resolve(cwd, step.working_dir) : cwd;
+      const workingDir = expandedWorkingDir ? path.resolve(cwd, expandedWorkingDir) : cwd;
 
       try {
-        const result = execSync(step.run, {
+        const result = execSync(expandedRun, {
           cwd: workingDir,
           timeout: 300_000,
           encoding: 'utf-8',
@@ -231,8 +274,18 @@ export class App {
         }
       }
 
+      // Record step result in context for later steps to reference
+      if (step.name) {
+        ctx.steps[step.name] = {
+          exit_code: exitCode,
+          stdout: stdout.trimEnd(),
+          stderr: stderr.trimEnd(),
+        };
+      }
+
       const stepExec: StepExecution = {
-        command: step.run,
+        name: step.name,
+        command: expandedRun,
         status: exitCode === 0 ? 'success' : 'failure',
         exit_code: exitCode,
         stdout: truncate(stdout) || undefined,

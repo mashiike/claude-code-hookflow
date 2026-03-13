@@ -4572,6 +4572,8 @@ function parseWorkflowFile(filePath) {
       for (const rawStep of def.steps) {
         if (rawStep && typeof rawStep.run === "string") {
           steps.push({
+            name: typeof rawStep.name === "string" ? rawStep.name : void 0,
+            if: typeof rawStep.if === "string" ? rawStep.if : void 0,
             run: rawStep.run,
             working_dir: rawStep.working_dir,
             continue: parseBool(rawStep.continue),
@@ -4664,6 +4666,71 @@ function matchWorkflow(workflow, changedFiles, cwd, trigger) {
     }
   }
   return matched;
+}
+
+// src/template.ts
+var EXPR_RE = /\$\{\{\s*(.*?)\s*\}\}/g;
+function resolveExpression(expr, ctx) {
+  const parts = expr.split(".");
+  let current = ctx;
+  for (const part of parts) {
+    if (current === null || current === void 0) return void 0;
+    if (typeof current !== "object") return void 0;
+    current = current[part];
+  }
+  return current;
+}
+function valueToString(val) {
+  if (val === null || val === void 0) return "";
+  if (Array.isArray(val)) return val.join(" ");
+  if (typeof val === "object") return JSON.stringify(val);
+  return String(val);
+}
+function expandTemplate(template, ctx) {
+  return template.replace(EXPR_RE, (_match, expr) => {
+    const val = resolveExpression(expr.trim(), ctx);
+    return valueToString(val);
+  });
+}
+function isTruthy(val) {
+  if (val === null || val === void 0) return false;
+  if (Array.isArray(val)) return val.length > 0;
+  const s = String(val);
+  return s !== "" && s !== "false" && s !== "0";
+}
+function stripQuotes(s) {
+  if (s.startsWith("'") && s.endsWith("'") || s.startsWith('"') && s.endsWith('"')) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+function resolveOperand(operand, ctx) {
+  const trimmed = operand.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") || trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return stripQuotes(trimmed);
+  }
+  return valueToString(resolveExpression(trimmed, ctx));
+}
+function evaluateCondition(expr, ctx) {
+  let inner = expr.trim();
+  const wrapped = inner.match(/^\$\{\{\s*(.*?)\s*\}\}$/);
+  if (wrapped) {
+    inner = wrapped[1];
+  }
+  const neqIdx = inner.indexOf("!=");
+  if (neqIdx !== -1) {
+    const left = resolveOperand(inner.slice(0, neqIdx), ctx);
+    const right = resolveOperand(inner.slice(neqIdx + 2), ctx);
+    return left !== right;
+  }
+  const eqIdx = inner.indexOf("==");
+  if (eqIdx !== -1) {
+    const left = resolveOperand(inner.slice(0, eqIdx), ctx);
+    const right = resolveOperand(inner.slice(eqIdx + 2), ctx);
+    return left === right;
+  }
+  const val = resolveExpression(inner, ctx);
+  return isTruthy(val);
 }
 
 // src/app.ts
@@ -4792,8 +4859,21 @@ var App = class {
         matched_files: files,
         jobs: {}
       };
+      const ctx = {
+        state: {
+          changed_files: state.changed_files,
+          trigger,
+          session_id: state.session_id,
+          cwd,
+          prompt: state.current_prompt?.prompt ?? ""
+        },
+        workflow: { name },
+        matched_files: files,
+        steps: {}
+      };
       for (const [jobKey, jobDef] of Object.entries(workflow.jobs)) {
-        const jobExec = this.executeJob(jobDef, workflow, cwd);
+        ctx.steps = {};
+        const jobExec = this.executeJob(jobDef, workflow, cwd, ctx);
         workflowExec.jobs[jobKey] = jobExec;
       }
       const hasFailure = Object.values(workflowExec.jobs).some((j) => j.status === "failure");
@@ -4812,19 +4892,34 @@ var App = class {
     );
     return this.buildRunResult(event, run);
   }
-  executeJob(jobDef, workflow, cwd) {
+  executeJob(jobDef, workflow, cwd, ctx) {
     const startedAt = (/* @__PURE__ */ new Date()).toISOString();
     const stepResults = [];
     let jobExitCode = 0;
     let jobStatus = "success";
     for (const step of jobDef.steps) {
       const stepStart = (/* @__PURE__ */ new Date()).toISOString();
+      if (step.if !== void 0) {
+        if (!evaluateCondition(step.if, ctx)) {
+          stepResults.push({
+            name: step.name,
+            command: step.run,
+            status: "skipped",
+            exit_code: 0,
+            started_at: stepStart,
+            finished_at: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          continue;
+        }
+      }
+      const expandedRun = expandTemplate(step.run, ctx);
+      const expandedWorkingDir = step.working_dir ? expandTemplate(step.working_dir, ctx) : void 0;
       let stdout = "";
       let stderr = "";
       let exitCode = 0;
-      const workingDir = step.working_dir ? path4.resolve(cwd, step.working_dir) : cwd;
+      const workingDir = expandedWorkingDir ? path4.resolve(cwd, expandedWorkingDir) : cwd;
       try {
-        const result = execSync(step.run, {
+        const result = execSync(expandedRun, {
           cwd: workingDir,
           timeout: 3e5,
           encoding: "utf-8",
@@ -4842,8 +4937,16 @@ var App = class {
           stderr = err instanceof Error ? err.message : String(err);
         }
       }
+      if (step.name) {
+        ctx.steps[step.name] = {
+          exit_code: exitCode,
+          stdout: stdout.trimEnd(),
+          stderr: stderr.trimEnd()
+        };
+      }
       const stepExec = {
-        command: step.run,
+        name: step.name,
+        command: expandedRun,
         status: exitCode === 0 ? "success" : "failure",
         exit_code: exitCode,
         stdout: truncate(stdout) || void 0,

@@ -8,8 +8,9 @@ export interface PromptInfo {
 }
 
 export interface StepExecution {
+  name?: string;
   command: string;
-  status: 'success' | 'failure';
+  status: 'success' | 'failure' | 'skipped';
   exit_code: number;
   continue?: boolean;
   stop_reason?: string;

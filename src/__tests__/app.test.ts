@@ -303,6 +303,149 @@ jobs:
   });
 
 
+  describe('template expressions', () => {
+    it('expands \${{ state.trigger }} in run command', () => {
+      writeWorkflow(
+        'tmpl.yaml',
+        `
+name: "Tmpl"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo \${{ state.trigger }}"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const step = state!.last_run!.workflows['Tmpl']!.jobs['check']!.steps![0]!;
+      expect(step.command).toBe('echo Stop');
+      expect(step.stdout).toContain('Stop');
+    });
+
+    it('expands \${{ matched_files }} in run command', () => {
+      writeWorkflow(
+        'tmpl-files.yaml',
+        `
+name: "TmplFiles"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo \${{ matched_files }}"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const step = state!.last_run!.workflows['TmplFiles']!.jobs['check']!.steps![0]!;
+      expect(step.command).toBe('echo src/app.ts');
+      expect(step.stdout).toContain('src/app.ts');
+    });
+
+    it('skips step when if condition is false', () => {
+      writeWorkflow(
+        'tmpl-if.yaml',
+        `
+name: "TmplIf"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo should-skip"
+        if: "\${{ state.trigger == 'TaskCompleted' }}"
+      - run: "echo should-run"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const steps = state!.last_run!.workflows['TmplIf']!.jobs['check']!.steps!;
+      expect(steps).toHaveLength(2);
+      expect(steps[0]!.status).toBe('skipped');
+      expect(steps[1]!.status).toBe('success');
+      expect(steps[1]!.stdout).toContain('should-run');
+    });
+
+    it('runs step when if condition is true', () => {
+      writeWorkflow(
+        'tmpl-if-true.yaml',
+        `
+name: "TmplIfTrue"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ran"
+        if: "\${{ state.trigger == 'Stop' }}"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const steps = state!.last_run!.workflows['TmplIfTrue']!.jobs['check']!.steps!;
+      expect(steps).toHaveLength(1);
+      expect(steps[0]!.status).toBe('success');
+      expect(steps[0]!.stdout).toContain('ran');
+    });
+
+    it('references previous step output via steps.<name>', () => {
+      writeWorkflow(
+        'tmpl-steps.yaml',
+        `
+name: "TmplSteps"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - name: greet
+        run: "echo hello-world"
+      - run: "echo \${{ steps.greet.stdout }}"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const steps = state!.last_run!.workflows['TmplSteps']!.jobs['check']!.steps!;
+      expect(steps).toHaveLength(2);
+      expect(steps[0]!.name).toBe('greet');
+      expect(steps[1]!.stdout).toContain('hello-world');
+    });
+
+    it('records step name in state', () => {
+      writeWorkflow(
+        'tmpl-name.yaml',
+        `
+name: "TmplName"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - name: my-step
+        run: "echo ok"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const step = state!.last_run!.workflows['TmplName']!.jobs['check']!.steps![0]!;
+      expect(step.name).toBe('my-step');
+    });
+  });
+
   describe('SessionEnd', () => {
     it('removes state file', () => {
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test' }));
