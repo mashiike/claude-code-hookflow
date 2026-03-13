@@ -20,7 +20,15 @@ Then install the plugin:
 
 ## Quick Start
 
-Create `.claude/hookflows/checks.yaml` in your project:
+The easiest way to create a workflow is with the built-in skill:
+
+```
+/create-workflow
+```
+
+Claude will ask about your project's language and tools, then generate a workflow YAML for you.
+
+You can also create `.claude/hookflows/checks.yaml` manually:
 
 ```yaml
 name: "TypeScript Check"
