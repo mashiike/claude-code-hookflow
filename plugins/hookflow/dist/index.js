@@ -2,11 +2,11 @@
 
 // src/index.ts
 import * as fs3 from "node:fs";
-import * as path5 from "node:path";
+import * as path6 from "node:path";
 
 // src/app.ts
 import { execSync } from "node:child_process";
-import * as path4 from "node:path";
+import * as path5 from "node:path";
 
 // src/hook-event.ts
 function parseHookEvent(data) {
@@ -4584,6 +4584,7 @@ function parseWorkflowFile(filePath) {
       if (steps.length > 0) {
         jobs[key] = {
           name: def.name,
+          each: typeof def.each === "string" ? def.each : void 0,
           steps,
           needs: toStringArray(def.needs),
           continue: parseBool(def.continue),
@@ -4669,6 +4670,16 @@ function matchWorkflow(workflow, changedFiles, cwd, trigger) {
 }
 
 // src/template.ts
+import * as path4 from "node:path";
+function uniqueDirs(files) {
+  const dirs = new Set(
+    files.map((f) => {
+      const d = path4.dirname(f);
+      return d === "." ? "./" : d.endsWith("/") ? d : d + "/";
+    })
+  );
+  return [...dirs].sort();
+}
 var EXPR_RE = /\$\{\{\s*(.*?)\s*\}\}/g;
 function resolveExpression(expr, ctx) {
   const parts = expr.split(".");
@@ -4738,6 +4749,41 @@ function truncate(s, max = 4096) {
   if (!s) return void 0;
   return s.length > max ? s.slice(0, max) + "\n... (truncated)" : s;
 }
+function resolveEachItems(each, ctx) {
+  switch (each) {
+    case "matched_files":
+      return ctx.matched_files;
+    case "matched_dirs":
+      return ctx.matched_dirs;
+    case "changed_files":
+      return ctx.state.changed_files;
+    case "changed_dirs":
+      return ctx.state.changed_dirs;
+    default:
+      return [];
+  }
+}
+function mergeIterations(iterations) {
+  if (iterations.length === 0) {
+    return {
+      status: "success",
+      started_at: (/* @__PURE__ */ new Date()).toISOString(),
+      finished_at: (/* @__PURE__ */ new Date()).toISOString(),
+      exit_code: 0,
+      steps: []
+    };
+  }
+  const allSteps = iterations.flatMap((i) => i.steps ?? []);
+  const hasFailure = iterations.some((i) => i.status === "failure");
+  const failedIteration = iterations.find((i) => i.status === "failure");
+  return {
+    status: hasFailure ? "failure" : "success",
+    started_at: iterations[0].started_at,
+    finished_at: iterations[iterations.length - 1].finished_at,
+    exit_code: hasFailure ? failedIteration?.exit_code ?? 1 : 0,
+    steps: allSteps
+  };
+}
 var App = class {
   statePathResolver;
   constructor(statePathResolver) {
@@ -4793,9 +4839,9 @@ var App = class {
     const state = this.loadOrCreateState(event);
     const cwd = state.cwd || event.cwd;
     let normalized = filePath;
-    if (path4.isAbsolute(filePath) && cwd) {
-      const rel = path4.relative(cwd, filePath);
-      if (!rel.startsWith("..") && !path4.isAbsolute(rel)) {
+    if (path5.isAbsolute(filePath) && cwd) {
+      const rel = path5.relative(cwd, filePath);
+      if (!rel.startsWith("..") && !path5.isAbsolute(rel)) {
         normalized = rel;
       }
     }
@@ -4859,9 +4905,12 @@ var App = class {
         matched_files: files,
         jobs: {}
       };
+      const matchedDirs = uniqueDirs(files);
+      const changedDirs = uniqueDirs(state.changed_files);
       const ctx = {
         state: {
           changed_files: state.changed_files,
+          changed_dirs: changedDirs,
           trigger,
           session_id: state.session_id,
           cwd,
@@ -4869,12 +4918,26 @@ var App = class {
         },
         workflow: { name },
         matched_files: files,
+        matched_dirs: matchedDirs,
+        each: { value: "" },
         steps: {}
       };
       for (const [jobKey, jobDef] of Object.entries(workflow.jobs)) {
-        ctx.steps = {};
-        const jobExec = this.executeJob(jobDef, workflow, cwd, ctx);
-        workflowExec.jobs[jobKey] = jobExec;
+        if (jobDef.each) {
+          const items = resolveEachItems(jobDef.each, ctx);
+          const iterations = [];
+          for (const item of items) {
+            ctx.each = { value: item };
+            ctx.steps = {};
+            iterations.push(this.executeJob(jobDef, workflow, cwd, ctx));
+          }
+          ctx.each = { value: "" };
+          workflowExec.jobs[jobKey] = mergeIterations(iterations);
+        } else {
+          ctx.steps = {};
+          const jobExec = this.executeJob(jobDef, workflow, cwd, ctx);
+          workflowExec.jobs[jobKey] = jobExec;
+        }
       }
       const hasFailure = Object.values(workflowExec.jobs).some((j) => j.status === "failure");
       if (hasFailure) {
@@ -4917,7 +4980,7 @@ var App = class {
       let stdout = "";
       let stderr = "";
       let exitCode = 0;
-      const workingDir = expandedWorkingDir ? path4.resolve(cwd, expandedWorkingDir) : cwd;
+      const workingDir = expandedWorkingDir ? path5.resolve(cwd, expandedWorkingDir) : cwd;
       try {
         const result = execSync(expandedRun, {
           cwd: workingDir,
@@ -5065,11 +5128,11 @@ function dumpInput(input) {
   if (typeof rawCwd !== "string" || rawCwd === "") {
     return;
   }
-  const cwd = path5.resolve(rawCwd);
-  if (!path5.isAbsolute(cwd)) {
+  const cwd = path6.resolve(rawCwd);
+  if (!path6.isAbsolute(cwd)) {
     return;
   }
-  const dumpDir = path5.join(cwd, ".claude", "hooks_dump");
+  const dumpDir = path6.join(cwd, ".claude", "hooks_dump");
   try {
     fs3.mkdirSync(dumpDir, { recursive: true, mode: 488 });
   } catch (err) {
@@ -5084,7 +5147,7 @@ function dumpInput(input) {
     formatted = input.toString("utf-8");
   }
   const filename = `dump_${formatTimestamp(/* @__PURE__ */ new Date())}.json`;
-  const dumpPath = path5.join(dumpDir, filename);
+  const dumpPath = path6.join(dumpDir, filename);
   try {
     fs3.writeFileSync(dumpPath, formatted + "\n", { mode: 384 });
   } catch (err) {
