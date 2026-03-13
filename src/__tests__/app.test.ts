@@ -15,6 +15,14 @@ function makeInput(overrides: Record<string, unknown>): string {
   });
 }
 
+const dummyEvent: HookEvent = {
+  session_id: '',
+  transcript_path: '',
+  cwd: '',
+  hook_event_name: '',
+  _raw: {},
+};
+
 describe('App', () => {
   let tmpDir: string;
   let resolver: (event: HookEvent) => string;
@@ -30,14 +38,29 @@ describe('App', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  function writeWorkflow(name: string, yaml: string): void {
+    const hookflowsDir = path.join(tmpDir, '.claude', 'hookflows');
+    fs.mkdirSync(hookflowsDir, { recursive: true });
+    fs.writeFileSync(path.join(hookflowsDir, name), yaml);
+  }
+
+  function setupWithFile(fileSuffix: string): void {
+    app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+    app.run(
+      makeInput({
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(tmpDir, fileSuffix) },
+        cwd: tmpDir,
+      }),
+    );
+  }
+
   describe('UserPromptSubmit', () => {
     it('creates state with prompt info', () => {
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'hello' }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state).not.toBeNull();
       expect(state!.session_id).toBe('sess-1');
       expect(state!.cwd).toBe('/tmp');
@@ -57,10 +80,7 @@ describe('App', () => {
       );
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'second' }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state!.changed_files).toEqual([]);
       expect(state!.current_prompt?.prompt).toBe('second');
     });
@@ -77,11 +97,9 @@ describe('App', () => {
         }),
       );
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
-      expect(state!.changed_files).toEqual(['/tmp/a.ts']);
+      const state = readState(dummyEvent, resolver);
+      // cwd=/tmp, file_path=/tmp/a.ts → 相対パス "a.ts" で記録
+      expect(state!.changed_files).toEqual(['a.ts']);
     });
 
     it('deduplicates file paths', () => {
@@ -101,11 +119,8 @@ describe('App', () => {
         }),
       );
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
-      expect(state!.changed_files).toEqual(['/tmp/a.ts']);
+      const state = readState(dummyEvent, resolver);
+      expect(state!.changed_files).toEqual(['a.ts']);
     });
 
     it('skips when no file_path', () => {
@@ -118,72 +133,51 @@ describe('App', () => {
         }),
       );
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state!.changed_files).toEqual([]);
     });
   });
 
   describe('Stop', () => {
     it('skips when stop_hook_active is true', () => {
-      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
-      app.run(
-        makeInput({
-          hook_event_name: 'PostToolUse',
-          tool_name: 'Write',
-          tool_input: { file_path: path.join(tmpDir, 'a.ts') },
-          cwd: tmpDir,
-        }),
+      writeWorkflow(
+        'ts-check.yaml',
+        `
+name: "TS Check"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
       );
-
+      setupWithFile('a.ts');
       app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: true, cwd: tmpDir }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state!.last_run).toBeUndefined();
     });
 
     it('records workflow execution when workflows match', () => {
-      const hookflowsDir = path.join(tmpDir, '.claude', 'hookflows');
-      fs.mkdirSync(hookflowsDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(hookflowsDir, 'ts-check.yaml'),
+      writeWorkflow(
+        'ts-check.yaml',
         `
 name: "TS Check"
-max_retries: 2
-triggers:
-  path_pattern:
-    include:
-      - "**/*.ts"
+paths:
+  - "**/*.ts"
 jobs:
   check:
-    command: "tsc --noEmit"
+    steps:
+      - run: "echo ok"
 `,
       );
-
-      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
-      app.run(
-        makeInput({
-          hook_event_name: 'PostToolUse',
-          tool_name: 'Write',
-          tool_input: { file_path: path.join(tmpDir, 'src', 'index.ts') },
-          cwd: tmpDir,
-        }),
-      );
+      setupWithFile('src/index.ts');
       app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state!.last_run).toBeDefined();
       expect(state!.last_run!.trigger).toBe('Stop');
-      expect(state!.last_run!.attempt).toBe(1);
-      expect(state!.last_run!.max_retries).toBe(2);
       expect(state!.last_run!.workflows['TS Check']).toBeDefined();
       expect(state!.last_run!.workflows['TS Check']!.status).toBe('success');
       expect(state!.last_run!.workflows['TS Check']!.matched_files).toEqual(['src/index.ts']);
@@ -199,15 +193,7 @@ jobs:
       }) as typeof process.stderr.write;
 
       try {
-        app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
-        app.run(
-          makeInput({
-            hook_event_name: 'PostToolUse',
-            tool_name: 'Write',
-            tool_input: { file_path: path.join(tmpDir, 'a.ts') },
-            cwd: tmpDir,
-          }),
-        );
+        setupWithFile('a.ts');
         app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
         expect(stderr.join('')).toContain('no workflows defined');
       } finally {
@@ -218,37 +204,22 @@ jobs:
 
   describe('TaskCompleted', () => {
     it('records workflow execution', () => {
-      const hookflowsDir = path.join(tmpDir, '.claude', 'hookflows');
-      fs.mkdirSync(hookflowsDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(hookflowsDir, 'go-fmt.yaml'),
+      writeWorkflow(
+        'go-fmt.yaml',
         `
 name: "Go Format"
-triggers:
-  path_pattern:
-    include:
-      - "**/*.go"
+paths:
+  - "**/*.go"
 jobs:
   fmt:
-    command: "gofmt -w ."
+    steps:
+      - run: "echo formatted"
 `,
       );
-
-      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
-      app.run(
-        makeInput({
-          hook_event_name: 'PostToolUse',
-          tool_name: 'Write',
-          tool_input: { file_path: path.join(tmpDir, 'main.go') },
-          cwd: tmpDir,
-        }),
-      );
+      setupWithFile('main.go');
       app.run(makeInput({ hook_event_name: 'TaskCompleted', cwd: tmpDir }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state!.last_run).toBeDefined();
       expect(state!.last_run!.trigger).toBe('TaskCompleted');
       expect(state!.last_run!.workflows['Go Format']!.status).toBe('success');
@@ -256,22 +227,92 @@ jobs:
     });
   });
 
+  describe('step execution', () => {
+    it('executes shell command and records success', () => {
+      writeWorkflow(
+        'echo.yaml',
+        `
+name: "Echo"
+paths:
+  - "**/*.ts"
+jobs:
+  greet:
+    steps:
+      - run: "echo hello"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['Echo']!.jobs['greet']!;
+      expect(job.status).toBe('success');
+      expect(job.exit_code).toBe(0);
+      expect(job.steps).toHaveLength(1);
+      expect(job.steps![0]!.command).toBe('echo hello');
+      expect(job.steps![0]!.stdout).toContain('hello');
+    });
+
+    it('records failure on non-zero exit', () => {
+      writeWorkflow(
+        'fail.yaml',
+        `
+name: "Fail"
+paths:
+  - "**/*.ts"
+jobs:
+  bad:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const wf = state!.last_run!.workflows['Fail']!;
+      expect(wf.status).toBe('failure');
+      const job = wf.jobs['bad']!;
+      expect(job.status).toBe('failure');
+      expect(job.exit_code).toBe(1);
+      expect(job.steps![0]!.status).toBe('failure');
+    });
+
+    it('stops at first failing step', () => {
+      writeWorkflow(
+        'multi.yaml',
+        `
+name: "Multi"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+      - run: "echo should-not-run"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['Multi']!.jobs['check']!;
+      expect(job.steps).toHaveLength(1);
+      expect(job.steps![0]!.command).toBe("sh -c 'exit 1'");
+    });
+  });
+
+
   describe('SessionEnd', () => {
     it('removes state file', () => {
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test' }));
 
-      const state = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const state = readState(dummyEvent, resolver);
       expect(state).not.toBeNull();
 
       app.run(makeInput({ hook_event_name: 'SessionEnd' }));
 
-      const stateAfter = readState(
-        { session_id: '', transcript_path: '', cwd: '', hook_event_name: '', _raw: {} },
-        resolver,
-      );
+      const stateAfter = readState(dummyEvent, resolver);
       expect(stateAfter).toBeNull();
     });
   });

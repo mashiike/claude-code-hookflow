@@ -14,6 +14,10 @@ function formatTimestamp(date: Date): string {
 }
 
 function dumpInput(input: Buffer): void {
+  if (process.env.HOOKFLOW_DEBUG !== '1') {
+    return;
+  }
+
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(input.toString('utf-8')) as Record<string, unknown>;
@@ -31,7 +35,7 @@ function dumpInput(input: Buffer): void {
     return;
   }
 
-  const dumpDir = path.join(cwd, '.claude', 'hookflow');
+  const dumpDir = path.join(cwd, '.claude', 'hooks_dump');
   try {
     fs.mkdirSync(dumpDir, { recursive: true, mode: 0o750 });
   } catch (err) {
@@ -67,7 +71,16 @@ async function main(): Promise<void> {
   dumpInput(data);
 
   const app = new App();
-  app.run(data);
+  const result = app.run(data);
+
+  if (result) {
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+    if (result.exitCode !== 0) {
+      process.exit(result.exitCode);
+    }
+  }
 }
 
 main().catch((err: unknown) => {

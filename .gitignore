@@ -9,7 +9,7 @@ plugins/hookflow/dist/
 
 # hookflow runtime
 .claude/hookflow-state/
-.claude/hookflow/*.json
+.claude/hooks_dump/
 
 # Local settings
 .claude/settings.local.json

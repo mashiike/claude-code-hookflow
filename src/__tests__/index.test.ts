@@ -27,9 +27,10 @@ describe('dumpInput (via CLI)', () => {
       cwd: process.cwd(),
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, HOOKFLOW_DEBUG: '1' },
     });
 
-    const dumpDir = path.join(tmpDir, '.claude', 'hookflow');
+    const dumpDir = path.join(tmpDir, '.claude', 'hooks_dump');
     expect(fs.existsSync(dumpDir)).toBe(true);
 
     const files = fs.readdirSync(dumpDir);

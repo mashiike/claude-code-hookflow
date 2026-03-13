@@ -7,11 +7,24 @@ export interface PromptInfo {
   started_at: string;
 }
 
+export interface StepExecution {
+  command: string;
+  status: 'success' | 'failure';
+  exit_code: number;
+  continue?: boolean;
+  stop_reason?: string;
+  stdout?: string;
+  stderr?: string;
+  started_at: string;
+  finished_at: string;
+}
+
 export interface JobExecution {
   status: 'success' | 'failure' | 'skipped';
   started_at?: string;
   finished_at?: string;
   exit_code?: number;
+  steps?: StepExecution[];
 }
 
 export interface WorkflowExecution {
@@ -23,8 +36,6 @@ export interface WorkflowExecution {
 
 export interface RunRecord {
   trigger: string;
-  attempt: number;
-  max_retries: number;
   started_at: string;
   finished_at?: string;
   workflows: Record<string, WorkflowExecution>;
