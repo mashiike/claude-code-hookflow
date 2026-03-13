@@ -15,7 +15,7 @@ First, add the marketplace:
 Then install the plugin:
 
 ```
-/plugin install hookflow@mashiike-claude-code-hookflow
+/plugin install hookflow@claude-code-hookflow
 ```
 
 ## Quick Start
