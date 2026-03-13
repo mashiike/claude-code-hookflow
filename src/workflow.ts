@@ -86,6 +86,10 @@ function parseWorkflowFile(filePath: string): Workflow | null {
   const eventNames = toStringArray(raw.on);
   const on = eventNames.length > 0 ? eventNames : DEFAULT_EVENT_NAMES;
 
+  if (typeof raw.name !== 'string' || raw.name === '') {
+    return null;
+  }
+
   const paths = toStringArray(raw.paths);
   if (paths.length === 0) {
     return null;
@@ -123,7 +127,7 @@ function parseWorkflowFile(filePath: string): Workflow | null {
   }
 
   return {
-    name: typeof raw.name === 'string' ? raw.name : path.basename(filePath, path.extname(filePath)),
+    name: raw.name as string,
     external_files: raw.external_files === true,
     continue: parseBool(raw.continue),
     stop_reason: typeof raw.stop_reason === 'string' ? raw.stop_reason : undefined,

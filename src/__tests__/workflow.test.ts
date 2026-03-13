@@ -234,6 +234,23 @@ jobs:
     expect(workflows[0]!.external_files).toBe(true);
   });
 
+  it('skips files without name', () => {
+    fs.writeFileSync(
+      path.join(hookflowsDir, 'no-name.yaml'),
+      `
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
+    );
+
+    const workflows = loadWorkflows(tmpDir);
+    expect(workflows).toHaveLength(0);
+  });
+
   it('skips files without paths', () => {
     fs.writeFileSync(
       path.join(hookflowsDir, 'empty.yaml'),
