@@ -3,10 +3,19 @@
   "owner": {
     "name": "mashiike"
   },
+  "metadata": {
+    "description": "YAML-defined workflows triggered by Claude Code hooks — fmt, lint, test, and more."
+  },
   "plugins": [
     {
-      "name": "claude-code-hookflow",
-      "source": "./plugins/hookflow"
+      "name": "hookflow",
+      "source": {
+        "source": "git-subdir",
+        "url": "mashiike/claude-code-hookflow",
+        "path": "plugins/hookflow",
+        "ref": "v0.0.0"
+      },
+      "description": "YAML-defined workflows triggered by Claude Code hooks — fmt, lint, test, and more."
     }
   ]
 }

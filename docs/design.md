@@ -2,38 +2,24 @@
 
 ## 確定事項
 
-- **トリガーは TaskCompleted**: PreToolUse/PostToolUse だと編集のたびに CI が回って邪魔。タスク完了時に 1 回だけ実行する
-- **YAML でワークフロー定義**: ユーザーがプロジェクトごとにワークフローを定義できる
-- **失敗時のフィードバック**: CI が失敗したら Claude に戻して修正させる
+- **トリガーは Stop + TaskCompleted**: `on` フィールドで制御。デフォルト両方
+- **YAML でワークフロー定義**: GitHub Actions 風の構文（`on`, `paths`, `jobs`, `steps`）
+- **失敗時のフィードバック**: Stop → `{decision: "block", reason}` で Claude にフィードバック。TaskCompleted → exit 2 + stderr
+- **ファイル配置**: `.claude/hookflows/*.yaml` (project) / `~/.claude/hookflows/*.yaml` (global)
+- **失敗制御**: `continue: bool` + `stop_reason: string`、step > job > workflow の順で cascade
+- **パス管理**: cwd 配下は相対パス、外部は絶対パス。`external_files: true` で外部ファイルもマッチ対象
 
-## 検討中・未決定
+## Hook 構成
 
-### YAML フォーマット
-- どんなフィールドを持つか
-- ファイルの配置場所（`.claude/hookflow/*.yaml`？プロジェクトルート？）
+| Hook | 用途 | 同期/非同期 |
+|------|------|-----------|
+| `UserPromptSubmit` | state リセット、changed_files クリア | 同期 |
+| `PostToolUse` (Write/Edit/MultiEdit) | 編集ファイル記録 | 非同期 |
+| `Stop` | ワークフロー実行 | 同期 |
+| `TaskCompleted` | ワークフロー実行 | 同期 |
+| `SessionEnd` | state ファイル削除 | 同期 |
 
-### 編集ファイルの把握方法
-- PostToolUse (async) で state ファイルに記録する案
-- TaskCompleted の stdin から得られる情報だけで足りるか？
+## 未実装
 
-### on_failure の挙動
-- `block` / `warn` / `ignore` の区分は引き継ぎ資料にあったが未確定
-- `TaskCompleted` で exit 0 + stdout JSON が additionalContext として Claude に届くか未検証
-
-### YAML パーサ
-- Node.js 標準に YAML パーサがない
-- js-yaml を vendor 同梱？JSON のみにする？別の方法？
-
-## Hook 選定
-
-| Hook | 用途 | 備考 |
-|------|------|------|
-| `UserPromptSubmit` | state リセット | 編集記録方式を採用する場合に必要 |
-| `PostToolUse` (async) | 編集ファイル記録 | 編集記録方式を採用する場合に必要 |
-| `TaskCompleted` | ワークフロー実行 | **確定** |
-
-## 未検証事項
-
-- [ ] `TaskCompleted` の stdin にどんな情報が含まれるか（編集ファイル一覧が取れるなら state 管理不要かも）
-- [ ] exit 0 + stdout JSON → additionalContext として Claude に届くか
-- [ ] `CLAUDE_PLUGIN_ROOT` 展開の既知バグ (issue #18517) の影響
+- `needs` (job 依存関係) による実行順制御
+- `SubagentStop` の対応
