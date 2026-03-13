@@ -20,6 +20,7 @@ Each key under `jobs` is the job identifier (e.g., `lint`, `test`, `build`).
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | no | — | Display name for the job |
+| `each` | string | no | — | Loop source: `matched_files`, `matched_dirs`, `changed_files`, or `changed_dirs`. Job runs once per item, with `${{ each.value }}` set to current item |
 | `needs` | string or string[] | no | `[]` | Job dependencies (not yet enforced in execution order) |
 | `continue` | boolean | no | — | Overrides workflow-level `continue` for this job |
 | `stop_reason` | string | no | — | Overrides workflow-level `stop_reason` for this job |
@@ -50,6 +51,9 @@ Use `${{ }}` in `run` and `working_dir` fields to interpolate runtime context.
 | `state.cwd` | string | Working directory |
 | `state.prompt` | string | Current user prompt text |
 | `matched_files` | string[] | Files matching this workflow's `paths` (space-separated when interpolated) |
+| `matched_dirs` | string[] | Unique directories of matched files, with trailing `/` (space-separated) |
+| `state.changed_dirs` | string[] | Unique directories of all changed files, with trailing `/` (space-separated) |
+| `each.value` | string | Current value in `each` loop (empty string outside loop) |
 | `workflow.name` | string | Workflow display name |
 | `steps.<name>.exit_code` | number | Exit code of a previously executed named step |
 | `steps.<name>.stdout` | string | Standard output of a previously executed named step |
@@ -135,6 +139,7 @@ jobs:
 - On `continue: true` failure, execution proceeds to the next step.
 - Skipped steps (via `if` condition) are recorded with `status: "skipped"`.
 - Step context (`steps.<name>.*`) is scoped per job and reset between jobs.
+- Jobs with `each` run once per item. All iteration steps are merged into a single job result. If any iteration fails, the job status is `failure`.
 
 ## File loading priority
 

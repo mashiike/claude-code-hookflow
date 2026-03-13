@@ -14,7 +14,7 @@ import type {
 } from './state.js';
 import { loadWorkflows, matchWorkflow, resolveFailureConfig } from './workflow.js';
 import type { Workflow, JobDef } from './workflow.js';
-import { expandTemplate, evaluateCondition } from './template.js';
+import { expandTemplate, evaluateCondition, uniqueDirs } from './template.js';
 import type { TemplateContext } from './template.js';
 
 export interface RunResult {
@@ -26,6 +26,43 @@ export interface RunResult {
 function truncate(s: string | undefined, max: number = 4096): string | undefined {
   if (!s) return undefined;
   return s.length > max ? s.slice(0, max) + '\n... (truncated)' : s;
+}
+
+function resolveEachItems(each: string, ctx: TemplateContext): string[] {
+  switch (each) {
+    case 'matched_files':
+      return ctx.matched_files;
+    case 'matched_dirs':
+      return ctx.matched_dirs;
+    case 'changed_files':
+      return ctx.state.changed_files;
+    case 'changed_dirs':
+      return ctx.state.changed_dirs;
+    default:
+      return [];
+  }
+}
+
+function mergeIterations(iterations: JobExecution[]): JobExecution {
+  if (iterations.length === 0) {
+    return {
+      status: 'success',
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      exit_code: 0,
+      steps: [],
+    };
+  }
+  const allSteps = iterations.flatMap((i) => i.steps ?? []);
+  const hasFailure = iterations.some((i) => i.status === 'failure');
+  const failedIteration = iterations.find((i) => i.status === 'failure');
+  return {
+    status: hasFailure ? 'failure' : 'success',
+    started_at: iterations[0]!.started_at,
+    finished_at: iterations[iterations.length - 1]!.finished_at,
+    exit_code: hasFailure ? (failedIteration?.exit_code ?? 1) : 0,
+    steps: allSteps,
+  };
 }
 
 export class App {
@@ -173,9 +210,13 @@ export class App {
         jobs: {},
       };
 
+      const matchedDirs = uniqueDirs(files);
+      const changedDirs = uniqueDirs(state.changed_files);
+
       const ctx: TemplateContext = {
         state: {
           changed_files: state.changed_files,
+          changed_dirs: changedDirs,
           trigger,
           session_id: state.session_id,
           cwd,
@@ -183,13 +224,27 @@ export class App {
         },
         workflow: { name },
         matched_files: files,
+        matched_dirs: matchedDirs,
+        each: { value: '' },
         steps: {},
       };
 
       for (const [jobKey, jobDef] of Object.entries(workflow.jobs)) {
-        ctx.steps = {};
-        const jobExec: JobExecution = this.executeJob(jobDef, workflow, cwd, ctx);
-        workflowExec.jobs[jobKey] = jobExec;
+        if (jobDef.each) {
+          const items = resolveEachItems(jobDef.each, ctx);
+          const iterations: JobExecution[] = [];
+          for (const item of items) {
+            ctx.each = { value: item };
+            ctx.steps = {};
+            iterations.push(this.executeJob(jobDef, workflow, cwd, ctx));
+          }
+          ctx.each = { value: '' };
+          workflowExec.jobs[jobKey] = mergeIterations(iterations);
+        } else {
+          ctx.steps = {};
+          const jobExec: JobExecution = this.executeJob(jobDef, workflow, cwd, ctx);
+          workflowExec.jobs[jobKey] = jobExec;
+        }
       }
 
       const hasFailure = Object.values(workflowExec.jobs).some((j) => j.status === 'failure');

@@ -28,6 +28,7 @@ stop_reason: "Fix message"         # optional, shown to Claude on failure
 
 jobs:
   job-name:
+    each: matched_dirs             # optional, loop over: matched_files/matched_dirs/changed_files/changed_dirs
     needs: other-job               # optional, string or array
     continue: true                 # optional, overrides workflow-level
     stop_reason: "Job message"     # optional
@@ -56,6 +57,9 @@ Use `${{ }}` syntax in `run` and `working_dir` fields to reference runtime conte
 | `${{ state.cwd }}` | string | Working directory |
 | `${{ state.prompt }}` | string | Current user prompt text |
 | `${{ matched_files }}` | string[] | Files that matched this workflow's paths (space-separated) |
+| `${{ matched_dirs }}` | string[] | Unique directories of matched files, with trailing `/` |
+| `${{ state.changed_dirs }}` | string[] | Unique directories of all changed files, with trailing `/` |
+| `${{ each.value }}` | string | Current value in `each` loop (empty outside loop) |
 | `${{ workflow.name }}` | string | Workflow name |
 | `${{ steps.<name>.exit_code }}` | number | Previous step's exit code |
 | `${{ steps.<name>.stdout }}` | string | Previous step's stdout |
@@ -172,4 +176,30 @@ jobs:
         continue: true
       - run: echo "prettier exit code: ${{ steps.prettier.exit_code }}"
         if: "${{ steps.prettier.exit_code != '0' }}"
+```
+
+### Using `each` loop
+
+```yaml
+# Run terraform fmt in each changed directory
+name: "Terraform Format"
+paths:
+  - "**/*.tf"
+jobs:
+  fmt:
+    each: matched_dirs
+    steps:
+      - run: terraform fmt
+        working_dir: ${{ each.value }}
+```
+
+```yaml
+# Run go test on all matched directories at once
+name: "Go Test"
+paths:
+  - "**/*.go"
+jobs:
+  test:
+    steps:
+      - run: go test --short ${{ matched_dirs }}
 ```

@@ -444,6 +444,165 @@ jobs:
       const step = state!.last_run!.workflows['TmplName']!.jobs['check']!.steps![0]!;
       expect(step.name).toBe('my-step');
     });
+
+    it('expands matched_dirs as space-separated', () => {
+      writeWorkflow(
+        'tmpl-dirs.yaml',
+        `
+name: "TmplDirs"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo \${{ matched_dirs }}"
+`,
+      );
+      // Add files in two different dirs
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'lib/b.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const step = state!.last_run!.workflows['TmplDirs']!.jobs['check']!.steps![0]!;
+      expect(step.stdout).toContain('lib/');
+      expect(step.stdout).toContain('src/');
+    });
+  });
+
+  describe('each loop', () => {
+    it('iterates over matched_files', () => {
+      writeWorkflow(
+        'each-files.yaml',
+        `
+name: "EachFiles"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    each: matched_files
+    steps:
+      - run: "echo \${{ each.value }}"
+`,
+      );
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/b.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const steps = state!.last_run!.workflows['EachFiles']!.jobs['check']!.steps!;
+      expect(steps).toHaveLength(2);
+      expect(steps[0]!.stdout).toContain('src/a.ts');
+      expect(steps[1]!.stdout).toContain('src/b.ts');
+    });
+
+    it('iterates over matched_dirs', () => {
+      writeWorkflow(
+        'each-dirs.yaml',
+        `
+name: "EachDirs"
+paths:
+  - "**/*.ts"
+jobs:
+  fmt:
+    each: matched_dirs
+    steps:
+      - run: "echo \${{ each.value }}"
+`,
+      );
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'lib/b.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const steps = state!.last_run!.workflows['EachDirs']!.jobs['fmt']!.steps!;
+      expect(steps).toHaveLength(2);
+      expect(steps[0]!.stdout).toContain('lib/');
+      expect(steps[1]!.stdout).toContain('src/');
+    });
+
+    it('reports failure when one iteration fails', () => {
+      writeWorkflow(
+        'each-fail.yaml',
+        `
+name: "EachFail"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    each: matched_files
+    steps:
+      - run: "sh -c 'if [ \${{ each.value }} = src/bad.ts ]; then exit 1; else echo ok; fi'"
+`,
+      );
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/good.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/bad.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['EachFail']!.jobs['check']!;
+      expect(job.status).toBe('failure');
+    });
   });
 
   describe('SessionEnd', () => {

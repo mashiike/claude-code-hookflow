@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { expandTemplate, evaluateCondition } from '../template.js';
+import { expandTemplate, evaluateCondition, uniqueDirs } from '../template.js';
 import type { TemplateContext } from '../template.js';
 
 function makeCtx(overrides?: Partial<TemplateContext>): TemplateContext {
   return {
     state: {
       changed_files: ['src/a.ts', 'src/b.ts'],
+      changed_dirs: ['src/'],
       trigger: 'Stop',
       session_id: 'sess-123',
       cwd: '/tmp/project',
@@ -13,6 +14,8 @@ function makeCtx(overrides?: Partial<TemplateContext>): TemplateContext {
     },
     workflow: { name: 'test-workflow' },
     matched_files: ['src/a.ts'],
+    matched_dirs: ['src/'],
+    each: { value: '' },
     steps: {},
     ...overrides,
   };
@@ -150,5 +153,47 @@ describe('evaluateCondition', () => {
   it('double-quoted strings', () => {
     const ctx = makeCtx();
     expect(evaluateCondition('${{ state.trigger == "Stop" }}', ctx)).toBe(true);
+  });
+});
+
+describe('uniqueDirs', () => {
+  it('extracts unique directories with trailing slash', () => {
+    expect(uniqueDirs(['src/a.ts', 'src/b.ts', 'lib/c.ts'])).toEqual(['lib/', 'src/']);
+  });
+
+  it('returns ./ for root-level files', () => {
+    expect(uniqueDirs(['a.ts'])).toEqual(['./']);
+  });
+
+  it('handles mixed depths', () => {
+    expect(uniqueDirs(['a.ts', 'src/b.ts', 'src/sub/c.ts'])).toEqual(['./', 'src/', 'src/sub/']);
+  });
+
+  it('returns empty array for empty input', () => {
+    expect(uniqueDirs([])).toEqual([]);
+  });
+
+  it('deduplicates same directory', () => {
+    expect(uniqueDirs(['src/a.ts', 'src/b.ts', 'src/c.ts'])).toEqual(['src/']);
+  });
+});
+
+describe('expandTemplate with dirs and each', () => {
+  it('expands matched_dirs as space-separated', () => {
+    const ctx = makeCtx({ matched_dirs: ['lib/', 'src/'] });
+    expect(expandTemplate('go test --short ${{ matched_dirs }}', ctx)).toBe(
+      'go test --short lib/ src/',
+    );
+  });
+
+  it('expands changed_dirs', () => {
+    const ctx = makeCtx();
+    ctx.state.changed_dirs = ['src/', 'test/'];
+    expect(expandTemplate('${{ state.changed_dirs }}', ctx)).toBe('src/ test/');
+  });
+
+  it('expands each.value', () => {
+    const ctx = makeCtx({ each: { value: 'src/' } });
+    expect(expandTemplate('terraform fmt ${{ each.value }}', ctx)).toBe('terraform fmt src/');
   });
 });

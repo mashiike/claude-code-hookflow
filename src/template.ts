@@ -1,6 +1,9 @@
+import * as path from 'node:path';
+
 export interface TemplateContext {
   state: {
     changed_files: string[];
+    changed_dirs: string[];
     trigger: string;
     session_id: string;
     cwd: string;
@@ -10,7 +13,19 @@ export interface TemplateContext {
     name: string;
   };
   matched_files: string[];
+  matched_dirs: string[];
+  each: { value: string };
   steps: Record<string, { exit_code: number; stdout: string; stderr: string }>;
+}
+
+export function uniqueDirs(files: string[]): string[] {
+  const dirs = new Set(
+    files.map((f) => {
+      const d = path.dirname(f);
+      return d === '.' ? './' : d.endsWith('/') ? d : d + '/';
+    }),
+  );
+  return [...dirs].sort();
 }
 
 const EXPR_RE = /\$\{\{\s*(.*?)\s*\}\}/g;

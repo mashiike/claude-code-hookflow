@@ -18,6 +18,7 @@ export interface Step extends FailureConfig {
 
 export interface JobDef extends FailureConfig {
   name?: string;
+  each?: string;
   steps: Step[];
   needs?: string[];
 }
@@ -55,6 +56,7 @@ interface RawWorkflow {
     string,
     {
       name?: string;
+      each?: string;
       continue?: boolean;
       stop_reason?: string;
       steps?: RawStep[];
@@ -123,6 +125,7 @@ function parseWorkflowFile(filePath: string): Workflow | null {
       if (steps.length > 0) {
         jobs[key] = {
           name: def.name,
+          each: typeof def.each === 'string' ? def.each : undefined,
           steps,
           needs: toStringArray(def.needs),
           continue: parseBool(def.continue),
