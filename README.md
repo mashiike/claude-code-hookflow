@@ -6,8 +6,16 @@ Claude Code plugin that automatically runs YAML-defined workflows (typecheck, li
 
 ## Install
 
-```bash
-claude plugin add github:mashiike/claude-code-hookflow
+First, add the marketplace:
+
+```
+/plugin marketplace add mashiike/claude-code-hookflow
+```
+
+Then install the plugin:
+
+```
+/plugin install hookflow@mashiike-claude-code-hookflow
 ```
 
 ## Quick Start
