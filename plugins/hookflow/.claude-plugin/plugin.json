@@ -1,6 +1,6 @@
 {
   "name": "claude-code-hookflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "YAML-defined workflows triggered by Claude Code hooks — fmt, lint, test, and more.",
   "author": {
     "name": "mashiike",
