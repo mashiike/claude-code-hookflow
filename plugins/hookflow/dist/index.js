@@ -48,6 +48,9 @@ function defaultStatePathResolver(event) {
   const dir = path.join(parsed.dir, parsed.name);
   return path.join(dir, "hookflow", "state.json");
 }
+function lastFailedRunPath(statePath) {
+  return path.join(path.dirname(statePath), "last_failed_run.json");
+}
 function readState(event, resolver) {
   const resolve3 = resolver ?? defaultStatePathResolver;
   const statePath = resolve3(event);
@@ -67,6 +70,41 @@ function writeState(event, state, resolver) {
   const dir = path.dirname(statePath);
   fs.mkdirSync(dir, { recursive: true, mode: 488 });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", { mode: 384 });
+}
+function saveFailedRun(event, state, resolver) {
+  const resolve3 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve3(event);
+  const failedPath = lastFailedRunPath(statePath);
+  const dir = path.dirname(failedPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 488 });
+  fs.writeFileSync(failedPath, JSON.stringify(state, null, 2) + "\n", { mode: 384 });
+  return failedPath;
+}
+function readFailedRun(event, resolver) {
+  const resolve3 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve3(event);
+  const failedPath = lastFailedRunPath(statePath);
+  try {
+    const data = fs.readFileSync(failedPath, "utf-8");
+    return JSON.parse(data);
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+function removeFailedRun(event, resolver) {
+  const resolve3 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve3(event);
+  const failedPath = lastFailedRunPath(statePath);
+  try {
+    fs.unlinkSync(failedPath);
+  } catch (err) {
+    if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
+      throw err;
+    }
+  }
 }
 function removeState(event, resolver) {
   const resolve3 = resolver ?? defaultStatePathResolver;
@@ -4637,16 +4675,16 @@ function loadWorkflows(cwd) {
   return workflows;
 }
 function resolveFailureConfig(step, job, workflow) {
+  let cont = false;
   if (step.continue !== void 0) {
-    return { continue: step.continue, stop_reason: step.stop_reason };
+    cont = step.continue;
+  } else if (job.continue !== void 0) {
+    cont = job.continue;
+  } else if (workflow.continue !== void 0) {
+    cont = workflow.continue;
   }
-  if (job.continue !== void 0) {
-    return { continue: job.continue, stop_reason: job.stop_reason };
-  }
-  if (workflow.continue !== void 0) {
-    return { continue: workflow.continue, stop_reason: workflow.stop_reason };
-  }
-  return { continue: false, stop_reason: workflow.stop_reason };
+  const stop_reason = step.stop_reason ?? job.stop_reason ?? workflow.stop_reason;
+  return { continue: cont, stop_reason };
 }
 function matchWorkflow(workflow, changedFiles, cwd, trigger) {
   if (trigger && !workflow.on.includes(trigger)) {
@@ -4681,7 +4719,7 @@ function uniqueDirs(files) {
   return [...dirs].sort();
 }
 var EXPR_RE = /\$\{\{\s*(.*?)\s*\}\}/g;
-function resolveExpression(expr, ctx) {
+function resolveVariable(expr, ctx) {
   const parts = expr.split(".");
   let current = ctx;
   for (const part of parts) {
@@ -4690,6 +4728,57 @@ function resolveExpression(expr, ctx) {
     current = current[part];
   }
   return current;
+}
+function parseFilters(raw) {
+  const segments = raw.split("|");
+  const variable = segments[0].trim();
+  const filters = [];
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i].trim();
+    const match2 = seg.match(/^(\w+)(?:\s+(.+))?$/);
+    if (match2) {
+      filters.push({ name: match2[1], arg: match2[2] ? stripQuotes(match2[2].trim()) : void 0 });
+    }
+  }
+  return { variable, filters };
+}
+function applyFilter(val, filter2) {
+  switch (filter2.name) {
+    case "prefixed": {
+      const prefix = filter2.arg ?? "";
+      if (Array.isArray(val)) {
+        return val.map((v) => {
+          const s2 = String(v);
+          return s2.startsWith(prefix) ? s2 : prefix + s2;
+        });
+      }
+      const s = String(val ?? "");
+      return s.startsWith(prefix) ? s : prefix + s;
+    }
+    case "suffixed": {
+      const suffix = filter2.arg ?? "";
+      if (Array.isArray(val)) {
+        return val.map((v) => {
+          const s2 = String(v);
+          return s2.endsWith(suffix) ? s2 : s2 + suffix;
+        });
+      }
+      const s = String(val ?? "");
+      return s.endsWith(suffix) ? s : s + suffix;
+    }
+    default:
+      process.stderr.write(`hookflow: warning: unknown filter "${filter2.name}"
+`);
+      return val;
+  }
+}
+function resolveExpression(expr, ctx) {
+  const { variable, filters } = parseFilters(expr);
+  let val = resolveVariable(variable, ctx);
+  for (const filter2 of filters) {
+    val = applyFilter(val, filter2);
+  }
+  return val;
 }
 function valueToString(val) {
   if (val === null || val === void 0) return "";
@@ -4793,8 +4882,7 @@ var App = class {
     const event = parseHookEvent(input);
     switch (event.hook_event_name) {
       case "UserPromptSubmit":
-        this.handleUserPromptSubmit(event);
-        return void 0;
+        return this.handleUserPromptSubmit(event);
       case "PostToolUse":
         this.handlePostToolUse(event);
         return void 0;
@@ -4819,6 +4907,18 @@ var App = class {
     return state ?? { session_id: event.session_id, cwd: event.cwd, changed_files: [] };
   }
   handleUserPromptSubmit(event) {
+    let failedRun = null;
+    try {
+      failedRun = readFailedRun(event, this.statePathResolver);
+      if (failedRun) {
+        removeFailedRun(event, this.statePathResolver);
+      }
+    } catch (err) {
+      process.stderr.write(
+        `hookflow: warning: failed to read previous failed run: ${err instanceof Error ? err.message : String(err)}
+`
+      );
+    }
     const state = this.loadOrCreateState(event);
     state.session_id = event.session_id;
     state.cwd = event.cwd;
@@ -4830,6 +4930,16 @@ var App = class {
     };
     state.last_run = void 0;
     writeState(event, state, this.statePathResolver);
+    if (failedRun?.last_run) {
+      const message = this.buildFailedRunSummary(failedRun.last_run);
+      if (message) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ continue: true, suppressPrompt: true, systemMessage: message })
+        };
+      }
+    }
+    return void 0;
   }
   handlePostToolUse(event) {
     const filePath = event.tool_input?.file_path;
@@ -4953,6 +5063,10 @@ var App = class {
       `hookflow: executed ${matched.size} workflow(s): ${workflowNames}
 `
     );
+    const hasAnyFailure = Object.values(run.workflows).some((w) => w.status === "failure");
+    if (hasAnyFailure) {
+      saveFailedRun(event, state, this.statePathResolver);
+    }
     return this.buildRunResult(event, run);
   }
   executeJob(jobDef, workflow, cwd, ctx) {
@@ -5027,8 +5141,6 @@ var App = class {
           jobStatus = "failure";
           break;
         }
-        jobExitCode = exitCode;
-        jobStatus = "failure";
       } else {
         stepResults.push(stepExec);
       }
@@ -5098,7 +5210,34 @@ var App = class {
       stderr: message
     };
   }
+  buildFailedRunSummary(run) {
+    const lines = [];
+    lines.push(`hookflow: previous run had failures (trigger: ${run.trigger})`);
+    for (const [wfName, wfExec] of Object.entries(run.workflows)) {
+      if (wfExec.status !== "failure") continue;
+      lines.push(`  workflow: "${wfName}"`);
+      for (const [jobKey, jobExec] of Object.entries(wfExec.jobs)) {
+        if (jobExec.status !== "failure" || !jobExec.steps) continue;
+        for (const step of jobExec.steps) {
+          if (step.status !== "failure") continue;
+          const suffix = step.continue === true ? " [continue]" : "";
+          let line = `    ${jobKey}: exit ${step.exit_code} - ${step.command}${suffix}`;
+          if (step.stop_reason) {
+            line += `
+      stop_reason: "${step.stop_reason}"`;
+          }
+          if (step.stderr) {
+            line += `
+      stderr: ${step.stderr}`;
+          }
+          lines.push(line);
+        }
+      }
+    }
+    return lines.length > 1 ? lines.join("\n") : void 0;
+  }
   handleSessionEnd(event) {
+    removeFailedRun(event, this.statePathResolver);
     removeState(event, this.statePathResolver);
   }
 };
