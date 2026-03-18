@@ -42,15 +42,13 @@ jobs:
     steps:
       - run: npm run typecheck
   lint:
-    continue: true
     steps:
       - run: npm run lint
-  test:
-    steps:
+        continue: true
       - run: npm test
 ```
 
-That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the checks. If `typecheck` or `test` fails, Claude is blocked and told to fix it. `lint` has `continue: true`, so failures are reported but don't block.
+That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the checks. If `typecheck` fails, its job fails. In the `lint` job, the first step (`npm run lint`) has `continue: true`, so its failure doesn't fail the job — the next step still runs. `npm test` has no `continue`, so its failure fails the job. Any job failure blocks Claude and tells it to fix the issues.
 
 ## How It Works
 
@@ -66,12 +64,22 @@ That's it. When Claude edits `.ts` files and tries to stop, hookflow runs the ch
 | **Stop** | `{decision: "block", reason: "..."}` | Claude continues working to fix |
 | **TaskCompleted** | exit 2 + stderr | Task stays incomplete, feedback to model |
 
-### Failure Config Cascade
+If Claude stops without fixing the issues and the user sends a new prompt, the previous failure info is automatically injected as a system message so Claude can pick up where it left off.
 
-`continue` and `stop_reason` resolve in order: **step > job > workflow > default** (`continue: false`).
+### `continue` Semantics
 
-- `continue: false` (default) — failure blocks Claude from stopping
-- `continue: true` — failure is reported but doesn't block
+`continue` resolves in order: **step > job > workflow > default** (`false`).
+
+- **`continue: false`** (default) — step failure **fails the job** and stops remaining steps
+- **`continue: true`** — step failure is **not treated as a failure**; the next step runs and the job does not fail because of this step
+
+Job-level `continue` cascades to all steps in the job. As a side effect, if all steps have `continue: true`, the job never fails.
+
+**Workflow result**: all jobs succeed → Claude proceeds. Any job fails → Claude is blocked.
+
+### `stop_reason` Cascade
+
+`stop_reason` resolves independently from `continue`, in order: **step > job > workflow**. This means you can set `stop_reason` on a step without setting `continue`.
 
 ## Template Expressions
 
@@ -82,7 +90,7 @@ jobs:
   fmt:
     steps:
       - run: npx prettier --write ${{ matched_files }}
-      - run: go test --short ${{ matched_dirs }}
+      - run: golangci-lint run ${{ matched_dirs | prefixed './' }}
       - name: lint
         run: npm run lint
         continue: true
@@ -106,6 +114,17 @@ jobs:
 | `${{ steps.<name>.exit_code }}` | Previous named step's exit code |
 | `${{ steps.<name>.stdout }}` | Previous named step's stdout |
 | `${{ steps.<name>.stderr }}` | Previous named step's stderr |
+
+### Pipe filters
+
+Apply transformations to values with `| filter_name 'arg'`:
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `prefixed 'str'` | Add prefix to each element (skips if already present) | `${{ matched_dirs \| prefixed './' }}` |
+| `suffixed 'str'` | Add suffix to each element (skips if already present) | `${{ matched_dirs \| suffixed '...' }}` |
+
+Filters can be chained: `${{ matched_dirs | prefixed './' | suffixed '...' }}`. Works on both arrays and scalar values.
 
 ### Step conditions
 
@@ -144,7 +163,7 @@ Valid `each` values: `matched_files`, `matched_dirs`, `changed_files`, `changed_
 | `paths` | string / string[] | yes | — | Glob patterns (minimatch) to match changed files |
 | `paths-ignore` | string / string[] | no | `[]` | Glob patterns to exclude |
 | `external_files` | boolean | no | `false` | Match files outside the project |
-| `continue` | boolean | no | `false` | Don't block on failure |
+| `continue` | boolean | no | `false` | Step failures not treated as job failures |
 | `stop_reason` | string | no | — | Message for Claude on failure |
 | `jobs` | object | no | `{}` | Job definitions |
 

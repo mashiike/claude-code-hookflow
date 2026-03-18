@@ -30,7 +30,7 @@ export function uniqueDirs(files: string[]): string[] {
 
 const EXPR_RE = /\$\{\{\s*(.*?)\s*\}\}/g;
 
-function resolveExpression(expr: string, ctx: TemplateContext): unknown {
+function resolveVariable(expr: string, ctx: TemplateContext): unknown {
   const parts = expr.split('.');
   let current: unknown = ctx;
   for (const part of parts) {
@@ -39,6 +39,64 @@ function resolveExpression(expr: string, ctx: TemplateContext): unknown {
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+interface Filter {
+  name: string;
+  arg?: string;
+}
+
+function parseFilters(raw: string): { variable: string; filters: Filter[] } {
+  const segments = raw.split('|');
+  const variable = segments[0]!.trim();
+  const filters: Filter[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i]!.trim();
+    const match = seg.match(/^(\w+)(?:\s+(.+))?$/);
+    if (match) {
+      filters.push({ name: match[1]!, arg: match[2] ? stripQuotes(match[2].trim()) : undefined });
+    }
+  }
+  return { variable, filters };
+}
+
+function applyFilter(val: unknown, filter: Filter): unknown {
+  switch (filter.name) {
+    case 'prefixed': {
+      const prefix = filter.arg ?? '';
+      if (Array.isArray(val)) {
+        return val.map((v) => {
+          const s = String(v);
+          return s.startsWith(prefix) ? s : prefix + s;
+        });
+      }
+      const s = String(val ?? '');
+      return s.startsWith(prefix) ? s : prefix + s;
+    }
+    case 'suffixed': {
+      const suffix = filter.arg ?? '';
+      if (Array.isArray(val)) {
+        return val.map((v) => {
+          const s = String(v);
+          return s.endsWith(suffix) ? s : s + suffix;
+        });
+      }
+      const s = String(val ?? '');
+      return s.endsWith(suffix) ? s : s + suffix;
+    }
+    default:
+      process.stderr.write(`hookflow: warning: unknown filter "${filter.name}"\n`);
+      return val;
+  }
+}
+
+function resolveExpression(expr: string, ctx: TemplateContext): unknown {
+  const { variable, filters } = parseFilters(expr);
+  let val = resolveVariable(variable, ctx);
+  for (const filter of filters) {
+    val = applyFilter(val, filter);
+  }
+  return val;
 }
 
 function valueToString(val: unknown): string {
