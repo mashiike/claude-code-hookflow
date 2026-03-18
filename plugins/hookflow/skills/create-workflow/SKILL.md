@@ -67,6 +67,17 @@ Use `${{ }}` syntax in `run` and `working_dir` fields to reference runtime conte
 
 Arrays are joined with spaces when interpolated. Unknown variables resolve to empty string.
 
+### Pipe filters
+
+Apply transformations to values with `| filter_name 'arg'`:
+
+| Filter | Description | Example |
+|--------|-------------|---------|
+| `prefixed 'str'` | Add prefix to each element (skips if already present) | `${{ matched_dirs \| prefixed './' }}` |
+| `suffixed 'str'` | Add suffix to each element (skips if already present) | `${{ matched_dirs \| suffixed '...' }}` |
+
+Filters can be chained: `${{ matched_dirs | prefixed './' | suffixed '...' }}`. Works on both arrays and scalar values.
+
 ### Conditions (`if`)
 
 Steps can have an `if` field to conditionally execute:
@@ -95,7 +106,14 @@ Supported: `==`, `!=` (string comparison), or bare expression (truthiness check)
 
 - **Triggers**: `Stop` (Claude finishes responding) and `TaskCompleted` (task marked done). Default: both.
 - **Path matching**: minimatch globs against files changed since last user prompt.
-- **Failure cascade**: `continue`/`stop_reason` resolve as step > job > workflow > default (`continue: false`).
+- **`continue` cascade**: resolves as step > job > workflow > default (`false`).
+  - `continue: false` (default): step failure **fails the job** and stops remaining steps.
+  - `continue: true`: step failure is **not treated as a failure**; next step runs, job doesn't fail because of this step.
+  - Job-level `continue` cascades to all steps in the job.
+  - Side effect: if all steps in a job have `continue: true`, the job never fails.
+- **`stop_reason` cascade**: resolves independently from `continue`, as step > job > workflow.
+- **Workflow result**: all jobs succeed → Claude proceeds. Any job fails → Claude is blocked.
+- **Failed run recovery**: if Claude stops without fixing, the failure info is injected as a system message on the next user prompt.
 - **Step execution**: Sequential shell commands. First `continue: false` failure stops the job.
 - **Timeout**: 300 seconds per step.
 
@@ -114,55 +132,59 @@ jobs:
     steps:
       - run: npm run typecheck
   lint:
-    continue: true
     steps:
       - run: npm run lint
-  test:
-    needs: typecheck
-    steps:
+        continue: true
+        stop_reason: "ESLint reported issues"
       - run: npm test
 ```
+
+In this example, `npm run lint` has `continue: true` — if it fails, the failure is reported but the job doesn't fail because of it and `npm test` still runs. If `npm test` fails, the `lint` job fails and blocks Claude.
 
 ### Go project
 
 ```yaml
 name: "Go Checks"
+stop_reason: "Go checks failed. Please fix the issues above."
 paths: "**/*.go"
+paths-ignore:
+  - "**/*.gen.go"
 jobs:
-  fmt:
-    continue: true
+  lint:
     steps:
-      - run: gofmt -l .
-  vet:
-    steps:
-      - run: go vet ./...
+      - run: goimports -w ${{ matched_files }}
+        continue: true
+      - run: golangci-lint run ${{ matched_dirs | prefixed './' }}
+        stop_reason: "golangci-lint reported issues. Please fix them."
   test:
-    needs: vet
     steps:
-      - run: go test ./...
+      - run: go test --short ${{ matched_dirs | prefixed './' }}
 ```
+
+In `lint`, `goimports -w` auto-fixes formatting and has `continue: true` (its failure doesn't fail the job). `golangci-lint` is the real gate — if it fails, the job fails. The `| prefixed './'` filter adds `./` to directory paths for Go tool compatibility.
 
 ### Python project
 
 ```yaml
 name: "Python Checks"
+stop_reason: "Python checks failed. Please fix the issues above."
 paths: "**/*.py"
 paths-ignore: "docs/**"
 jobs:
   lint:
-    continue: true
     steps:
-      - run: ruff check .
-  typecheck:
-    steps:
-      - run: mypy .
+      - run: ruff check --fix ${{ matched_files }}
+        continue: true
+      - run: mypy ${{ matched_files }}
+        stop_reason: "mypy reported type errors"
   test:
-    needs: typecheck
     steps:
       - run: pytest
 ```
 
-### Using template expressions
+`ruff check --fix` auto-fixes and has `continue: true`. `mypy` is the gate for the `lint` job.
+
+### Using template expressions and pipe filters
 
 ```yaml
 name: "Format Changed Files"
@@ -178,6 +200,16 @@ jobs:
         if: "${{ steps.prettier.exit_code != '0' }}"
 ```
 
+```yaml
+# Use pipe filters for Go tooling compatibility
+name: "Go Vet"
+paths: "**/*.go"
+jobs:
+  vet:
+    steps:
+      - run: go vet ${{ matched_dirs | prefixed './' | suffixed '...' }}
+```
+
 ### Using `each` loop
 
 ```yaml
@@ -191,15 +223,4 @@ jobs:
     steps:
       - run: terraform fmt
         working_dir: ${{ each.value }}
-```
-
-```yaml
-# Run go test on all matched directories at once
-name: "Go Test"
-paths:
-  - "**/*.go"
-jobs:
-  test:
-    steps:
-      - run: go test --short ${{ matched_dirs }}
 ```

@@ -3,7 +3,15 @@ import * as path from 'node:path';
 import { parseHookEvent } from './hook-event.js';
 
 import type { HookEvent } from './hook-event.js';
-import { readState, writeState, removeState, defaultStatePathResolver } from './state.js';
+import {
+  readState,
+  writeState,
+  removeState,
+  saveFailedRun,
+  readFailedRun,
+  removeFailedRun,
+  defaultStatePathResolver,
+} from './state.js';
 import type {
   State,
   StatePathResolver,
@@ -77,8 +85,7 @@ export class App {
 
     switch (event.hook_event_name) {
       case 'UserPromptSubmit':
-        this.handleUserPromptSubmit(event);
-        return undefined;
+        return this.handleUserPromptSubmit(event);
       case 'PostToolUse':
         this.handlePostToolUse(event);
         return undefined;
@@ -104,7 +111,20 @@ export class App {
     return state ?? { session_id: event.session_id, cwd: event.cwd, changed_files: [] };
   }
 
-  private handleUserPromptSubmit(event: HookEvent): void {
+  private handleUserPromptSubmit(event: HookEvent): RunResult | undefined {
+    // Check for a previous failed run before resetting state
+    let failedRun: State | null = null;
+    try {
+      failedRun = readFailedRun(event, this.statePathResolver);
+      if (failedRun) {
+        removeFailedRun(event, this.statePathResolver);
+      }
+    } catch (err: unknown) {
+      process.stderr.write(
+        `hookflow: warning: failed to read previous failed run: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+
     const state = this.loadOrCreateState(event);
 
     state.session_id = event.session_id;
@@ -120,6 +140,17 @@ export class App {
     state.last_run = undefined;
 
     writeState(event, state, this.statePathResolver);
+
+    if (failedRun?.last_run) {
+      const message = this.buildFailedRunSummary(failedRun.last_run);
+      if (message) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ continue: true, suppressPrompt: true, systemMessage: message }),
+        };
+      }
+    }
+    return undefined;
   }
 
   private handlePostToolUse(event: HookEvent): void {
@@ -265,6 +296,11 @@ export class App {
       `hookflow: executed ${matched.size} workflow(s): ${workflowNames}\n`,
     );
 
+    const hasAnyFailure = Object.values(run.workflows).some((w) => w.status === 'failure');
+    if (hasAnyFailure) {
+      saveFailedRun(event, state, this.statePathResolver);
+    }
+
     return this.buildRunResult(event, run);
   }
 
@@ -361,9 +397,7 @@ export class App {
           jobStatus = 'failure';
           break;
         }
-        // continue: true — record failure but proceed to next step
-        jobExitCode = exitCode;
-        jobStatus = 'failure';
+        // continue: true — not treated as failure, proceed to next step
       } else {
         stepResults.push(stepExec);
       }
@@ -453,7 +487,38 @@ export class App {
     };
   }
 
+  private buildFailedRunSummary(run: RunRecord): string | undefined {
+    const lines: string[] = [];
+    lines.push(`hookflow: previous run had failures (trigger: ${run.trigger})`);
+
+    for (const [wfName, wfExec] of Object.entries(run.workflows)) {
+      if (wfExec.status !== 'failure') continue;
+
+      lines.push(`  workflow: "${wfName}"`);
+      for (const [jobKey, jobExec] of Object.entries(wfExec.jobs)) {
+        if (jobExec.status !== 'failure' || !jobExec.steps) continue;
+
+        for (const step of jobExec.steps) {
+          if (step.status !== 'failure') continue;
+
+          const suffix = step.continue === true ? ' [continue]' : '';
+          let line = `    ${jobKey}: exit ${step.exit_code} - ${step.command}${suffix}`;
+          if (step.stop_reason) {
+            line += `\n      stop_reason: "${step.stop_reason}"`;
+          }
+          if (step.stderr) {
+            line += `\n      stderr: ${step.stderr}`;
+          }
+          lines.push(line);
+        }
+      }
+    }
+
+    return lines.length > 1 ? lines.join('\n') : undefined;
+  }
+
   private handleSessionEnd(event: HookEvent): void {
+    removeFailedRun(event, this.statePathResolver);
     removeState(event, this.statePathResolver);
   }
 }

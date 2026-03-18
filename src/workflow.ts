@@ -192,17 +192,20 @@ export function resolveFailureConfig(
   job: FailureConfig,
   workflow: FailureConfig,
 ): { continue: boolean; stop_reason?: string } {
+  // Resolve continue: cascade step → job → workflow → default false
+  let cont = false;
   if (step.continue !== undefined) {
-    return { continue: step.continue, stop_reason: step.stop_reason };
+    cont = step.continue;
+  } else if (job.continue !== undefined) {
+    cont = job.continue;
+  } else if (workflow.continue !== undefined) {
+    cont = workflow.continue;
   }
-  if (job.continue !== undefined) {
-    return { continue: job.continue, stop_reason: job.stop_reason };
-  }
-  if (workflow.continue !== undefined) {
-    return { continue: workflow.continue, stop_reason: workflow.stop_reason };
-  }
-  // default: block (continue: false), but still propagate stop_reason if set
-  return { continue: false, stop_reason: workflow.stop_reason };
+
+  // Resolve stop_reason: cascade step → job → workflow (independent of continue)
+  const stop_reason = step.stop_reason ?? job.stop_reason ?? workflow.stop_reason;
+
+  return { continue: cont, stop_reason };
 }
 
 export function matchWorkflow(

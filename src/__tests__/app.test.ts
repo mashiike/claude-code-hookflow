@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { App } from '../app.js';
-import { readState } from '../state.js';
+import { readState, readFailedRun } from '../state.js';
 import type { HookEvent } from '../hook-event.js';
 
 function makeInput(overrides: Record<string, unknown>): string {
@@ -605,6 +605,243 @@ jobs:
     });
   });
 
+  describe('continue: true step does not fail job', () => {
+    it('job succeeds when failing step has continue: true', () => {
+      writeWorkflow(
+        'continue-step.yaml',
+        `
+name: "ContinueStep"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+        continue: true
+      - run: "echo should-run"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['ContinueStep']!.jobs['check']!;
+      expect(job.status).toBe('success');
+      expect(job.steps).toHaveLength(2);
+      expect(job.steps![0]!.status).toBe('failure');
+      expect(job.steps![0]!.continue).toBe(true);
+      expect(job.steps![1]!.status).toBe('success');
+    });
+
+    it('job fails when non-continue step fails after continue step', () => {
+      writeWorkflow(
+        'mixed-continue.yaml',
+        `
+name: "MixedContinue"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+        continue: true
+      - run: "sh -c 'exit 2'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['MixedContinue']!.jobs['check']!;
+      expect(job.status).toBe('failure');
+      expect(job.exit_code).toBe(2);
+    });
+
+    it('job-level continue cascades to steps', () => {
+      writeWorkflow(
+        'job-continue.yaml',
+        `
+name: "JobContinue"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    continue: true
+    steps:
+      - run: "sh -c 'exit 1'"
+      - run: "echo should-run"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const state = readState(dummyEvent, resolver);
+      const job = state!.last_run!.workflows['JobContinue']!.jobs['check']!;
+      expect(job.status).toBe('success');
+      expect(job.steps).toHaveLength(2);
+    });
+
+    it('workflow succeeds when all failures are continue: true', () => {
+      writeWorkflow(
+        'wf-continue.yaml',
+        `
+name: "WfContinue"
+paths:
+  - "**/*.ts"
+jobs:
+  lint:
+    continue: true
+    steps:
+      - run: "sh -c 'exit 1'"
+  test:
+    steps:
+      - run: "echo ok"
+`,
+      );
+      setupWithFile('src/app.ts');
+      const result = app.run(
+        makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }),
+      );
+
+      const state = readState(dummyEvent, resolver);
+      expect(state!.last_run!.workflows['WfContinue']!.status).toBe('success');
+      expect(result).toBeUndefined();
+    });
+
+    it('blocks when a non-continue job fails', () => {
+      writeWorkflow(
+        'block-fail.yaml',
+        `
+name: "BlockFail"
+paths:
+  - "**/*.ts"
+stop_reason: "checks failed"
+jobs:
+  lint:
+    continue: true
+    steps:
+      - run: "sh -c 'exit 1'"
+  test:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      const result = app.run(
+        makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }),
+      );
+
+      expect(result).toBeDefined();
+      expect(result!.exitCode).toBe(0);
+      const stdout = JSON.parse(result!.stdout!);
+      expect(stdout.decision).toBe('block');
+    });
+  });
+
+  describe('failed run backup', () => {
+    it('saves failed run on workflow failure', () => {
+      writeWorkflow(
+        'fail-backup.yaml',
+        `
+name: "FailBackup"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const failedState = readFailedRun(dummyEvent, resolver);
+      expect(failedState).not.toBeNull();
+      expect(failedState!.last_run).toBeDefined();
+      expect(failedState!.last_run!.workflows['FailBackup']!.status).toBe('failure');
+    });
+
+    it('does not save failed run on success', () => {
+      writeWorkflow(
+        'success-no-backup.yaml',
+        `
+name: "SuccessNoBackup"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      const failedState = readFailedRun(dummyEvent, resolver);
+      expect(failedState).toBeNull();
+    });
+
+    it('injects previous failure as systemMessage on next UserPromptSubmit', () => {
+      writeWorkflow(
+        'fail-inject.yaml',
+        `
+name: "FailInject"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'echo lint-error >&2; exit 1'"
+        stop_reason: "lint failed"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      // Next UserPromptSubmit should return the failure info
+      const result = app.run(
+        makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'fix it', cwd: tmpDir }),
+      );
+
+      expect(result).toBeDefined();
+      const stdout = JSON.parse(result!.stdout!);
+      expect(stdout.continue).toBe(true);
+      expect(stdout.systemMessage).toContain('previous run had failures');
+      expect(stdout.systemMessage).toContain('FailInject');
+      expect(stdout.systemMessage).toContain('lint failed');
+
+      // Failed run should be cleaned up
+      const failedState = readFailedRun(dummyEvent, resolver);
+      expect(failedState).toBeNull();
+    });
+
+    it('second UserPromptSubmit has no failure info', () => {
+      writeWorkflow(
+        'fail-once.yaml',
+        `
+name: "FailOnce"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      // First UserPromptSubmit returns failure info
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'fix', cwd: tmpDir }));
+
+      // Second UserPromptSubmit should have no failure info
+      const result = app.run(
+        makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'next task', cwd: tmpDir }),
+      );
+      expect(result).toBeUndefined();
+    });
+  });
+
   describe('SessionEnd', () => {
     it('removes state file', () => {
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test' }));
@@ -616,6 +853,32 @@ jobs:
 
       const stateAfter = readState(dummyEvent, resolver);
       expect(stateAfter).toBeNull();
+    });
+
+    it('removes failed run file on SessionEnd', () => {
+      writeWorkflow(
+        'fail-session.yaml',
+        `
+name: "FailSession"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+      setupWithFile('src/app.ts');
+      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
+
+      // Failed run should exist
+      expect(readFailedRun(dummyEvent, resolver)).not.toBeNull();
+
+      app.run(makeInput({ hook_event_name: 'SessionEnd' }));
+
+      // Both state and failed run should be gone
+      expect(readState(dummyEvent, resolver)).toBeNull();
+      expect(readFailedRun(dummyEvent, resolver)).toBeNull();
     });
   });
 

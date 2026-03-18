@@ -58,6 +58,10 @@ export function defaultStatePathResolver(event: HookEvent): string {
   return path.join(dir, 'hookflow', 'state.json');
 }
 
+export function lastFailedRunPath(statePath: string): string {
+  return path.join(path.dirname(statePath), 'last_failed_run.json');
+}
+
 export function readState(event: HookEvent, resolver?: StatePathResolver): State | null {
   const resolve = resolver ?? defaultStatePathResolver;
   const statePath = resolve(event);
@@ -80,6 +84,47 @@ export function writeState(event: HookEvent, state: State, resolver?: StatePathR
   const dir = path.dirname(statePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o750 });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+}
+
+export function saveFailedRun(event: HookEvent, state: State, resolver?: StatePathResolver): string {
+  const resolve = resolver ?? defaultStatePathResolver;
+  const statePath = resolve(event);
+  const failedPath = lastFailedRunPath(statePath);
+
+  const dir = path.dirname(failedPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o750 });
+  fs.writeFileSync(failedPath, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+  return failedPath;
+}
+
+export function readFailedRun(event: HookEvent, resolver?: StatePathResolver): State | null {
+  const resolve = resolver ?? defaultStatePathResolver;
+  const statePath = resolve(event);
+  const failedPath = lastFailedRunPath(statePath);
+
+  try {
+    const data = fs.readFileSync(failedPath, 'utf-8');
+    return JSON.parse(data) as State;
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export function removeFailedRun(event: HookEvent, resolver?: StatePathResolver): void {
+  const resolve = resolver ?? defaultStatePathResolver;
+  const statePath = resolve(event);
+  const failedPath = lastFailedRunPath(statePath);
+
+  try {
+    fs.unlinkSync(failedPath);
+  } catch (err: unknown) {
+    if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+      throw err;
+    }
+  }
 }
 
 export function removeState(event: HookEvent, resolver?: StatePathResolver): void {

@@ -197,3 +197,49 @@ describe('expandTemplate with dirs and each', () => {
     expect(expandTemplate('terraform fmt ${{ each.value }}', ctx)).toBe('terraform fmt src/');
   });
 });
+
+describe('pipe filters', () => {
+  it('prefixed adds prefix to array items', () => {
+    const ctx = makeCtx({ matched_dirs: ['internal/app/', 'internal/core/'] });
+    expect(expandTemplate('${{ matched_dirs | prefixed "./" }}', ctx)).toBe(
+      './internal/app/ ./internal/core/',
+    );
+  });
+
+  it('prefixed skips items already having the prefix', () => {
+    const ctx = makeCtx({ matched_dirs: ['./src/', 'lib/'] });
+    expect(expandTemplate('${{ matched_dirs | prefixed "./" }}', ctx)).toBe('./src/ ./lib/');
+  });
+
+  it('prefixed works on scalar value', () => {
+    const ctx = makeCtx({ each: { value: 'internal/app/' } });
+    expect(expandTemplate('${{ each.value | prefixed "./" }}', ctx)).toBe('./internal/app/');
+  });
+
+  it('suffixed adds suffix to array items', () => {
+    const ctx = makeCtx({ matched_dirs: ['src/', 'lib/'] });
+    expect(expandTemplate('${{ matched_dirs | suffixed "..." }}', ctx)).toBe('src/... lib/...');
+  });
+
+  it('suffixed skips items already having the suffix', () => {
+    const ctx = makeCtx({ matched_dirs: ['src/...', 'lib/'] });
+    expect(expandTemplate('${{ matched_dirs | suffixed "..." }}', ctx)).toBe('src/... lib/...');
+  });
+
+  it('chained filters', () => {
+    const ctx = makeCtx({ matched_dirs: ['internal/app/', 'internal/core/'] });
+    expect(expandTemplate('${{ matched_dirs | prefixed "./" | suffixed "..." }}', ctx)).toBe(
+      './internal/app/... ./internal/core/...',
+    );
+  });
+
+  it('single-quoted arg', () => {
+    const ctx = makeCtx({ matched_dirs: ['src/'] });
+    expect(expandTemplate("${{ matched_dirs | prefixed './' }}", ctx)).toBe('./src/');
+  });
+
+  it('filter on empty array returns empty string', () => {
+    const ctx = makeCtx({ matched_dirs: [] });
+    expect(expandTemplate('${{ matched_dirs | prefixed "./" }}', ctx)).toBe('');
+  });
+});
