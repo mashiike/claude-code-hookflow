@@ -781,45 +781,37 @@ jobs:
       expect(failedState).toBeNull();
     });
 
-    it('injects previous failure as systemMessage on next UserPromptSubmit', () => {
+    it('failure message See: path points to failed run copy', () => {
       writeWorkflow(
-        'fail-inject.yaml',
+        'fail-see.yaml',
         `
-name: "FailInject"
+name: "FailSee"
 paths:
   - "**/*.ts"
 jobs:
   check:
     steps:
-      - run: "sh -c 'echo lint-error >&2; exit 1'"
-        stop_reason: "lint failed"
+      - run: "sh -c 'exit 1'"
 `,
       );
       setupWithFile('src/app.ts');
-      app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
-
-      // Next UserPromptSubmit should return the failure info
       const result = app.run(
-        makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'fix it', cwd: tmpDir }),
+        makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }),
       );
 
       expect(result).toBeDefined();
-      const stdout = JSON.parse(result!.stdout!);
-      expect(stdout.continue).toBe(true);
-      expect(stdout.systemMessage).toContain('previous run had failures');
-      expect(stdout.systemMessage).toContain('FailInject');
-      expect(stdout.systemMessage).toContain('lint failed');
-
-      // Failed run should be cleaned up
-      const failedState = readFailedRun(dummyEvent, resolver);
-      expect(failedState).toBeNull();
+      // See: path should point to last_failed_run.json, not state.json
+      const message = result!.stderr ?? result!.stdout ?? '';
+      expect(message).toContain('See:');
+      expect(message).toContain('last_failed_run.json');
+      expect(message).not.toContain('state.json');
     });
 
-    it('second UserPromptSubmit has no failure info', () => {
+    it('failed run copy survives UserPromptSubmit state reset', () => {
       writeWorkflow(
-        'fail-once.yaml',
+        'fail-survive.yaml',
         `
-name: "FailOnce"
+name: "FailSurvive"
 paths:
   - "**/*.ts"
 jobs:
@@ -831,14 +823,12 @@ jobs:
       setupWithFile('src/app.ts');
       app.run(makeInput({ hook_event_name: 'Stop', stop_hook_active: false, cwd: tmpDir }));
 
-      // First UserPromptSubmit returns failure info
+      // UserPromptSubmit resets state.json but failed run copy should survive
       app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'fix', cwd: tmpDir }));
 
-      // Second UserPromptSubmit should have no failure info
-      const result = app.run(
-        makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'next task', cwd: tmpDir }),
-      );
-      expect(result).toBeUndefined();
+      const failedState = readFailedRun(dummyEvent, resolver);
+      expect(failedState).not.toBeNull();
+      expect(failedState!.last_run).toBeDefined();
     });
   });
 
