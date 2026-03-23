@@ -9,6 +9,5 @@
   "repository": "https://github.com/mashiike/claude-code-hookflow",
   "license": "MIT",
   "keywords": ["hooks", "workflow", "ci", "fmt", "lint", "test", "automation"],
-  "hooks": "./hooks/hooks.json",
   "skills": "./skills"
 }
