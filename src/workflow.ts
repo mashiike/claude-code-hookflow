@@ -29,6 +29,7 @@ export interface Workflow extends FailureConfig {
   on: string[];
   paths: string[];
   paths_ignore: string[];
+  agent_type?: string[];
   jobs: Record<string, JobDef>;
   _file: string;
 }
@@ -52,6 +53,7 @@ interface RawWorkflow {
   on?: string | string[];
   paths?: string | string[];
   'paths-ignore'?: string | string[];
+  agent_type?: string | string[];
   jobs?: Record<
     string,
     {
@@ -135,6 +137,8 @@ function parseWorkflowFile(filePath: string): Workflow | null {
     }
   }
 
+  const agentType = toStringArray(raw.agent_type);
+
   return {
     name: raw.name as string,
     external_files: raw.external_files === true,
@@ -143,6 +147,7 @@ function parseWorkflowFile(filePath: string): Workflow | null {
     on,
     paths,
     paths_ignore: pathsIgnore,
+    agent_type: agentType.length > 0 ? agentType : undefined,
     jobs,
     _file: filePath,
   };
@@ -213,9 +218,16 @@ export function matchWorkflow(
   changedFiles: string[],
   cwd: string,
   trigger?: string,
+  agentType?: string,
 ): string[] {
   if (trigger && !workflow.on.includes(trigger)) {
     return [];
+  }
+
+  if (workflow.agent_type) {
+    if (!agentType || !workflow.agent_type.includes(agentType)) {
+      return [];
+    }
   }
 
   const matched: string[] = [];

@@ -267,6 +267,46 @@ jobs:
     expect(workflows).toHaveLength(0);
   });
 
+  it('parses agent_type field', () => {
+    fs.writeFileSync(
+      path.join(hookflowsDir, 'sub-lint.yaml'),
+      `
+name: "Sub Lint"
+on: SubagentStop
+agent_type: [reviewer, general-purpose]
+paths:
+  - "**/*.ts"
+jobs:
+  lint:
+    steps:
+      - run: "echo lint"
+`,
+    );
+
+    const workflows = loadWorkflows(tmpDir);
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0]!.on).toEqual(['SubagentStop']);
+    expect(workflows[0]!.agent_type).toEqual(['reviewer', 'general-purpose']);
+  });
+
+  it('agent_type is undefined when not specified', () => {
+    fs.writeFileSync(
+      path.join(hookflowsDir, 'no-agent-type.yaml'),
+      `
+name: "No Agent Type"
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
+    );
+
+    const workflows = loadWorkflows(tmpDir);
+    expect(workflows[0]!.agent_type).toBeUndefined();
+  });
+
   it('returns empty for non-existent directory', () => {
     const workflows = loadWorkflows('/nonexistent/path');
     expect(workflows).toHaveLength(0);
@@ -361,5 +401,33 @@ describe('matchWorkflow', () => {
   it('ignores event_name filter when trigger is not provided', () => {
     const w = makeWorkflow(['**/*.ts'], [], ['Stop']);
     expect(matchWorkflow(w, ['src/app.ts'], '/project')).toEqual(['src/app.ts']);
+  });
+
+  it('filters by agent_type when workflow specifies it', () => {
+    const w: Workflow = {
+      ...makeWorkflow(['**/*.ts'], [], ['SubagentStop']),
+      agent_type: ['reviewer'],
+    };
+    expect(matchWorkflow(w, ['src/app.ts'], '/project', 'SubagentStop', 'reviewer')).toEqual([
+      'src/app.ts',
+    ]);
+    expect(
+      matchWorkflow(w, ['src/app.ts'], '/project', 'SubagentStop', 'general-purpose'),
+    ).toEqual([]);
+  });
+
+  it('does not match agent_type workflow when agentType is undefined (main agent)', () => {
+    const w: Workflow = {
+      ...makeWorkflow(['**/*.ts'], [], ['Stop', 'SubagentStop']),
+      agent_type: ['reviewer'],
+    };
+    expect(matchWorkflow(w, ['src/app.ts'], '/project', 'Stop', undefined)).toEqual([]);
+  });
+
+  it('matches all agent_types when workflow does not specify agent_type', () => {
+    const w = makeWorkflow(['**/*.ts'], [], ['SubagentStop']);
+    expect(
+      matchWorkflow(w, ['src/app.ts'], '/project', 'SubagentStop', 'general-purpose'),
+    ).toEqual(['src/app.ts']);
   });
 });

@@ -68,6 +68,38 @@ describe('parseHookEvent', () => {
     expect(() => parseHookEvent(JSON.stringify(rest))).toThrow('hook_event_name');
   });
 
+  it('parses agent_id and agent_type', () => {
+    const input = JSON.stringify({
+      ...baseEvent,
+      hook_event_name: 'SubagentStart',
+      agent_id: 'agent-123',
+      agent_type: 'general-purpose',
+    });
+    const event = parseHookEvent(input);
+    expect(event.agent_id).toBe('agent-123');
+    expect(event.agent_type).toBe('general-purpose');
+  });
+
+  it('parses agent_transcript_path', () => {
+    const input = JSON.stringify({
+      ...baseEvent,
+      hook_event_name: 'SubagentStop',
+      agent_id: 'agent-123',
+      agent_type: 'general-purpose',
+      agent_transcript_path: '/tmp/subagents/agent-123.jsonl',
+    });
+    const event = parseHookEvent(input);
+    expect(event.agent_transcript_path).toBe('/tmp/subagents/agent-123.jsonl');
+  });
+
+  it('agent fields are undefined for main agent events', () => {
+    const input = JSON.stringify(baseEvent);
+    const event = parseHookEvent(input);
+    expect(event.agent_id).toBeUndefined();
+    expect(event.agent_type).toBeUndefined();
+    expect(event.agent_transcript_path).toBeUndefined();
+  });
+
   it('throws on invalid JSON', () => {
     expect(() => parseHookEvent('not json')).toThrow();
   });

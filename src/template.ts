@@ -8,6 +8,10 @@ export interface TemplateContext {
     session_id: string;
     cwd: string;
     prompt: string;
+    agent_id?: string;
+    agent_type?: string;
+    parent_changed_files?: string[];
+    parent_changed_dirs?: string[];
   };
   workflow: {
     name: string;

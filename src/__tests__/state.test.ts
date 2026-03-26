@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import type { HookEvent } from '../hook-event.js';
 import {
   defaultStatePathResolver,
+  subagentStatePath,
   readState,
   writeState,
   removeState,
@@ -32,6 +33,16 @@ describe('defaultStatePathResolver', () => {
     const event = makeEvent('/tmp/session');
     const result = defaultStatePathResolver(event);
     expect(result).toBe('/tmp/session/hookflow/state.json');
+  });
+});
+
+describe('subagentStatePath', () => {
+  it('derives subagent path from base state path', () => {
+    const basePath = '/home/user/.claude/projects/abc/session-1/hookflow/state.json';
+    const result = subagentStatePath(basePath, 'agent-xyz');
+    expect(result).toBe(
+      '/home/user/.claude/projects/abc/session-1/hookflow/subagents/agent-xyz/state.json',
+    );
   });
 });
 

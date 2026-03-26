@@ -22,9 +22,25 @@
 | `PostToolUse` (Write/Edit/MultiEdit) | 編集ファイル記録 | 非同期 |
 | `Stop` | ワークフロー実行、失敗時 state 退避 | 同期 |
 | `TaskCompleted` | ワークフロー実行、失敗時 state 退避 | 同期 |
-| `SessionEnd` | state ファイル + 退避ファイル削除 | 同期 |
+| `SubagentStart` | subagent state を Fork（parent changed_files をスナップショット） | 非同期 |
+| `SubagentStop` | ワークフロー実行（subagent の changed_files のみ）、失敗時 state 退避 | 同期 |
+| `SessionEnd` | state ファイル + 退避ファイル + subagent state 削除 | 同期 |
+
+## Subagent State Fork モデル
+
+- `SubagentStart` 時にメイン state の `changed_files` をスナップショットし、subagent 用の state を作成
+- `PostToolUse` は `agent_id` の有無でメイン/subagent の state に振り分け
+- `SubagentStop` 時は subagent の `changed_files` のみでワークフロー実行
+- parent の変更はテンプレートコンテキストの `state.parent_changed_files` で参照可能
+- ワークフロー YAML の `agent_type` フィールドでサブエージェントのタイプによるフィルタが可能
+
+State ディレクトリ構造:
+```
+{transcript_dir}/{transcript_name}/hookflow/
+  state.json                          ← メイン
+  subagents/{agent_id}/state.json     ← サブエージェントごと
+```
 
 ## 未実装
 
 - `needs` (job 依存関係) による実行順制御
-- `SubagentStop` の対応
