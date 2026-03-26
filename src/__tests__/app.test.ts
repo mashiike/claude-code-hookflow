@@ -903,7 +903,7 @@ jobs:
       );
 
       // Subagent state should exist with parent snapshot
-      const subResolver = () =>
+      const subResolver = (): string =>
         path.join(tmpDir, 'hookflow', 'subagents', 'agent-001', 'state.json');
       const subState = readState(dummyEvent, subResolver);
       expect(subState).not.toBeNull();
@@ -946,7 +946,7 @@ jobs:
       expect(mainState!.changed_files).toEqual([]);
 
       // Subagent state should have the changed file
-      const subResolver = () =>
+      const subResolver = (): string =>
         path.join(tmpDir, 'hookflow', 'subagents', 'agent-002', 'state.json');
       const subState = readState(dummyEvent, subResolver);
       expect(subState!.changed_files).toEqual(['src/test.ts']);
@@ -1025,7 +1025,7 @@ jobs:
       );
 
       // Check subagent state has the workflow execution
-      const subResolver = () =>
+      const subResolver = (): string =>
         path.join(tmpDir, 'hookflow', 'subagents', 'agent-003', 'state.json');
       const subState = readState(dummyEvent, subResolver);
       expect(subState!.last_run).toBeDefined();
