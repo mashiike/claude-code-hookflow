@@ -10,6 +10,9 @@ export interface HookEvent {
   tool_name?: string;
   tool_input?: ToolInput;
   stop_hook_active?: boolean;
+  agent_id?: string;
+  agent_type?: string;
+  agent_transcript_path?: string;
   _raw: Record<string, unknown>;
 }
 
@@ -49,6 +52,9 @@ export function parseHookEvent(data: Buffer | string): HookEvent {
     tool_name: typeof raw.tool_name === 'string' ? raw.tool_name : undefined,
     tool_input: toolInput,
     stop_hook_active: typeof raw.stop_hook_active === 'boolean' ? raw.stop_hook_active : undefined,
+    agent_id: typeof raw.agent_id === 'string' ? raw.agent_id : undefined,
+    agent_type: typeof raw.agent_type === 'string' ? raw.agent_type : undefined,
+    agent_transcript_path: typeof raw.agent_transcript_path === 'string' ? raw.agent_transcript_path : undefined,
     _raw: raw,
   };
 }

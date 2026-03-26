@@ -882,6 +882,325 @@ jobs:
     });
   });
 
+  describe('SubagentStart', () => {
+    it('creates subagent state with empty changed_files and parent snapshot', () => {
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/main.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-001',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+
+      // Subagent state should exist with parent snapshot
+      const subResolver = () =>
+        path.join(tmpDir, 'hookflow', 'subagents', 'agent-001', 'state.json');
+      const subState = readState(dummyEvent, subResolver);
+      expect(subState).not.toBeNull();
+      expect(subState!.changed_files).toEqual([]);
+      expect(subState!.parent_changed_files).toEqual(['src/main.ts']);
+      expect(subState!.agent_id).toBe('agent-001');
+      expect(subState!.agent_type).toBe('general-purpose');
+    });
+
+    it('does nothing without agent_id', () => {
+      app.run(makeInput({ hook_event_name: 'SubagentStart', cwd: tmpDir }));
+      // No crash, no subagent state created
+    });
+  });
+
+  describe('PostToolUse with agent_id', () => {
+    it('routes to subagent state when agent_id is present', () => {
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-002',
+          agent_type: 'reviewer',
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/test.ts') },
+          agent_id: 'agent-002',
+          agent_type: 'reviewer',
+          cwd: tmpDir,
+        }),
+      );
+
+      // Main state should have no changed_files
+      const mainState = readState(dummyEvent, resolver);
+      expect(mainState!.changed_files).toEqual([]);
+
+      // Subagent state should have the changed file
+      const subResolver = () =>
+        path.join(tmpDir, 'hookflow', 'subagents', 'agent-002', 'state.json');
+      const subState = readState(dummyEvent, subResolver);
+      expect(subState!.changed_files).toEqual(['src/test.ts']);
+    });
+
+    it('skips when subagent state does not exist', () => {
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      // No SubagentStart, so subagent state doesn't exist
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/test.ts') },
+          agent_id: 'agent-missing',
+          cwd: tmpDir,
+        }),
+      );
+
+      // Main state should still have no changes (not written to main either)
+      const mainState = readState(dummyEvent, resolver);
+      expect(mainState!.changed_files).toEqual([]);
+    });
+  });
+
+  describe('SubagentStop', () => {
+    it('runs workflows against subagent changed_files only', () => {
+      writeWorkflow(
+        'sub-lint.yaml',
+        `
+name: "SubLint"
+on: SubagentStop
+paths:
+  - "**/*.ts"
+jobs:
+  lint:
+    steps:
+      - run: "echo \${{ matched_files }}"
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/main.ts') },
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-003',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/test.ts') },
+          agent_id: 'agent-003',
+          cwd: tmpDir,
+        }),
+      );
+
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStop',
+          agent_id: 'agent-003',
+          agent_type: 'general-purpose',
+          stop_hook_active: false,
+          cwd: tmpDir,
+        }),
+      );
+
+      // Check subagent state has the workflow execution
+      const subResolver = () =>
+        path.join(tmpDir, 'hookflow', 'subagents', 'agent-003', 'state.json');
+      const subState = readState(dummyEvent, subResolver);
+      expect(subState!.last_run).toBeDefined();
+      expect(subState!.last_run!.trigger).toBe('SubagentStop');
+      expect(subState!.last_run!.workflows['SubLint']).toBeDefined();
+      // Only subagent's file should be matched, not main's src/main.ts
+      expect(subState!.last_run!.workflows['SubLint']!.matched_files).toEqual(['src/test.ts']);
+    });
+
+    it('skips when stop_hook_active is true', () => {
+      writeWorkflow(
+        'sub-active.yaml',
+        `
+name: "SubActive"
+on: SubagentStop
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-004',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          agent_id: 'agent-004',
+          cwd: tmpDir,
+        }),
+      );
+
+      const result = app.run(
+        makeInput({
+          hook_event_name: 'SubagentStop',
+          agent_id: 'agent-004',
+          stop_hook_active: true,
+          cwd: tmpDir,
+        }),
+      );
+      expect(result).toBeUndefined();
+    });
+
+    it('returns decision block on failure', () => {
+      writeWorkflow(
+        'sub-fail.yaml',
+        `
+name: "SubFail"
+on: SubagentStop
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "sh -c 'exit 1'"
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-005',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          agent_id: 'agent-005',
+          cwd: tmpDir,
+        }),
+      );
+
+      const result = app.run(
+        makeInput({
+          hook_event_name: 'SubagentStop',
+          agent_id: 'agent-005',
+          agent_type: 'general-purpose',
+          stop_hook_active: false,
+          cwd: tmpDir,
+        }),
+      );
+
+      expect(result).toBeDefined();
+      expect(result!.exitCode).toBe(0);
+      const stdout = JSON.parse(result!.stdout!);
+      expect(stdout.decision).toBe('block');
+    });
+
+    it('does not match workflow with wrong agent_type', () => {
+      writeWorkflow(
+        'sub-typed.yaml',
+        `
+name: "SubTyped"
+on: SubagentStop
+agent_type: [reviewer]
+paths:
+  - "**/*.ts"
+jobs:
+  check:
+    steps:
+      - run: "echo ok"
+`,
+      );
+
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-006',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+      app.run(
+        makeInput({
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: path.join(tmpDir, 'src/a.ts') },
+          agent_id: 'agent-006',
+          cwd: tmpDir,
+        }),
+      );
+
+      const result = app.run(
+        makeInput({
+          hook_event_name: 'SubagentStop',
+          agent_id: 'agent-006',
+          agent_type: 'general-purpose',
+          stop_hook_active: false,
+          cwd: tmpDir,
+        }),
+      );
+
+      // Should not match because agent_type is general-purpose, not reviewer
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe('SessionEnd cleans up subagent states', () => {
+    it('removes subagent state directories', () => {
+      app.run(makeInput({ hook_event_name: 'UserPromptSubmit', prompt: 'test', cwd: tmpDir }));
+      app.run(
+        makeInput({
+          hook_event_name: 'SubagentStart',
+          agent_id: 'agent-cleanup',
+          agent_type: 'general-purpose',
+          cwd: tmpDir,
+        }),
+      );
+
+      const subDir = path.join(tmpDir, 'hookflow', 'subagents');
+      expect(fs.existsSync(subDir)).toBe(true);
+
+      app.run(makeInput({ hook_event_name: 'SessionEnd' }));
+
+      expect(fs.existsSync(subDir)).toBe(false);
+    });
+  });
+
   describe('unknown event', () => {
     it('does nothing for unknown events', () => {
       expect(() => app.run(makeInput({ hook_event_name: 'UnknownEvent' }))).not.toThrow();

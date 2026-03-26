@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parseHookEvent } from './hook-event.js';
 
@@ -11,6 +12,8 @@ import {
   readFailedRun,
   removeFailedRun,
   defaultStatePathResolver,
+  subagentStatePath,
+  subagentsDir,
 } from './state.js';
 import type {
   State,
@@ -46,6 +49,10 @@ function resolveEachItems(each: string, ctx: TemplateContext): string[] {
       return ctx.state.changed_files;
     case 'changed_dirs':
       return ctx.state.changed_dirs;
+    case 'parent_changed_files':
+      return ctx.state.parent_changed_files ?? [];
+    case 'parent_changed_dirs':
+      return ctx.state.parent_changed_dirs ?? [];
     default:
       return [];
   }
@@ -93,6 +100,11 @@ export class App {
         return this.handleStop(event);
       case 'TaskCompleted':
         return this.handleTaskCompleted(event);
+      case 'SubagentStart':
+        this.handleSubagentStart(event);
+        return undefined;
+      case 'SubagentStop':
+        return this.handleSubagentStop(event);
       case 'SessionEnd':
         this.handleSessionEnd(event);
         return undefined;
@@ -159,7 +171,25 @@ export class App {
       return;
     }
 
-    const state = this.loadOrCreateState(event);
+    const agentId = event.agent_id;
+    const resolver = agentId
+      ? this.subagentStateResolver(agentId)
+      : this.statePathResolver;
+
+    let state: State | null = null;
+    try {
+      state = readState(event, resolver);
+    } catch {
+      state = null;
+    }
+    if (!state) {
+      if (agentId) {
+        // subagent state doesn't exist (SubagentStart not received yet); skip
+        return;
+      }
+      state = { session_id: event.session_id, cwd: event.cwd, changed_files: [] };
+    }
+
     const cwd = state.cwd || event.cwd;
 
     // cwd 配下のファイルは相対パスで記録、それ以外は絶対パスのまま
@@ -176,7 +206,7 @@ export class App {
     }
     state.changed_files.push(normalized);
 
-    writeState(event, state, this.statePathResolver);
+    writeState(event, state, resolver);
   }
 
   private handleStop(event: HookEvent): RunResult | undefined {
@@ -190,10 +220,57 @@ export class App {
     return this.runWorkflows(event, 'TaskCompleted');
   }
 
-  private runWorkflows(event: HookEvent, trigger: string): RunResult | undefined {
+  private handleSubagentStart(event: HookEvent): void {
+    const agentId = event.agent_id;
+    if (!agentId) return;
+
+    const mainState = this.loadOrCreateState(event);
+
+    const subState: State = {
+      session_id: event.session_id,
+      cwd: event.cwd,
+      changed_files: [],
+      parent_changed_files: [...mainState.changed_files],
+      agent_id: agentId,
+      agent_type: event.agent_type,
+      current_prompt: mainState.current_prompt,
+    };
+
+    const resolver = this.subagentStateResolver(agentId);
+    writeState(event, subState, resolver);
+  }
+
+  private handleSubagentStop(event: HookEvent): RunResult | undefined {
+    if (event.stop_hook_active) {
+      return undefined;
+    }
+
+    const agentId = event.agent_id;
+    if (!agentId) return undefined;
+
+    return this.runWorkflows(event, 'SubagentStop', agentId);
+  }
+
+  private subagentStateResolver(agentId: string): StatePathResolver {
+    const baseResolver = this.statePathResolver ?? defaultStatePathResolver;
+    return (evt: HookEvent) => {
+      const basePath = baseResolver(evt);
+      return subagentStatePath(basePath, agentId);
+    };
+  }
+
+  private runWorkflows(
+    event: HookEvent,
+    trigger: string,
+    agentId?: string,
+  ): RunResult | undefined {
+    const resolver = agentId
+      ? this.subagentStateResolver(agentId)
+      : this.statePathResolver;
+
     let state: State | null = null;
     try {
-      state = readState(event, this.statePathResolver);
+      state = readState(event, resolver);
     } catch {
       return undefined;
     }
@@ -212,9 +289,11 @@ export class App {
       return undefined;
     }
 
+    const agentType = agentId ? (state.agent_type ?? event.agent_type) : undefined;
+
     const matched = new Map<string, { workflow: Workflow; files: string[] }>();
     for (const w of workflows) {
-      const files = matchWorkflow(w, state.changed_files, cwd, trigger);
+      const files = matchWorkflow(w, state.changed_files, cwd, trigger, agentType);
       if (files.length > 0) {
         matched.set(w.name, { workflow: w, files });
       }
@@ -244,6 +323,10 @@ export class App {
       const matchedDirs = uniqueDirs(files);
       const changedDirs = uniqueDirs(state.changed_files);
 
+      const parentChangedDirs = state.parent_changed_files
+        ? uniqueDirs(state.parent_changed_files)
+        : undefined;
+
       const ctx: TemplateContext = {
         state: {
           changed_files: state.changed_files,
@@ -252,6 +335,10 @@ export class App {
           session_id: state.session_id,
           cwd,
           prompt: state.current_prompt?.prompt ?? '',
+          agent_id: state.agent_id,
+          agent_type: state.agent_type,
+          parent_changed_files: state.parent_changed_files,
+          parent_changed_dirs: parentChangedDirs,
         },
         workflow: { name },
         matched_files: files,
@@ -289,7 +376,7 @@ export class App {
     run.finished_at = new Date().toISOString();
 
     state.last_run = run;
-    writeState(event, state, this.statePathResolver);
+    writeState(event, state, resolver);
 
     const workflowNames = [...matched.keys()].join(', ');
     process.stderr.write(
@@ -298,10 +385,11 @@ export class App {
 
     const hasAnyFailure = Object.values(run.workflows).some((w) => w.status === 'failure');
     if (hasAnyFailure) {
+      // Save failed run at main state path for UserPromptSubmit to pick up
       saveFailedRun(event, state, this.statePathResolver);
     }
 
-    return this.buildRunResult(event, run);
+    return this.buildRunResult(event, run, resolver);
   }
 
   private executeJob(
@@ -417,7 +505,11 @@ export class App {
     return resolve(event);
   }
 
-  private buildRunResult(event: HookEvent, run: RunRecord): RunResult | undefined {
+  private buildRunResult(
+    event: HookEvent,
+    run: RunRecord,
+    stateResolver?: StatePathResolver,
+  ): RunResult | undefined {
     const failureLines: string[] = [];
     let hasBlockingFailure = false;
 
@@ -455,8 +547,8 @@ export class App {
       return undefined;
     }
 
-    const statePath = this.resolveStatePath(event);
-    failureLines.push(`See: ${statePath}`);
+    const resolve = stateResolver ?? this.statePathResolver ?? defaultStatePathResolver;
+    failureLines.push(`See: ${resolve(event)}`);
     const message = failureLines.join('\n');
 
     if (!hasBlockingFailure) {
@@ -469,7 +561,7 @@ export class App {
     }
 
     // Blocking failure: output format depends on trigger
-    if (run.trigger === 'Stop') {
+    if (run.trigger === 'Stop' || run.trigger === 'SubagentStop') {
       // Stop hook: exit 0 + {decision: "block", reason: "..."}
       // Claude receives `reason` and continues working to fix issues
       return {
@@ -520,5 +612,15 @@ export class App {
   private handleSessionEnd(event: HookEvent): void {
     removeFailedRun(event, this.statePathResolver);
     removeState(event, this.statePathResolver);
+
+    // Clean up all subagent states
+    const baseResolver = this.statePathResolver ?? defaultStatePathResolver;
+    const basePath = baseResolver(event);
+    const subDir = subagentsDir(basePath);
+    try {
+      fs.rmSync(subDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
   }
 }

@@ -48,6 +48,9 @@ export interface State {
   changed_files: string[];
   current_prompt?: PromptInfo;
   last_run?: RunRecord;
+  parent_changed_files?: string[];
+  agent_id?: string;
+  agent_type?: string;
 }
 
 export type StatePathResolver = (event: HookEvent) => string;
@@ -56,6 +59,20 @@ export function defaultStatePathResolver(event: HookEvent): string {
   const parsed = path.parse(event.transcript_path);
   const dir = path.join(parsed.dir, parsed.name);
   return path.join(dir, 'hookflow', 'state.json');
+}
+
+export function subagentStatePath(basePath: string, agentId: string): string {
+  const dir = path.dirname(basePath);
+  const subDir = path.join(dir, 'subagents');
+  const resolved = path.resolve(subDir, agentId, 'state.json');
+  if (!resolved.startsWith(path.resolve(subDir) + path.sep)) {
+    throw new Error(`Invalid agent_id: path traversal detected`);
+  }
+  return resolved;
+}
+
+export function subagentsDir(basePath: string): string {
+  return path.join(path.dirname(basePath), 'subagents');
 }
 
 export function lastFailedRunPath(statePath: string): string {
