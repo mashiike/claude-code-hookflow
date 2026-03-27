@@ -13,7 +13,7 @@
         "source": "git-subdir",
         "url": "mashiike/claude-code-hookflow",
         "path": "plugins/hookflow",
-        "ref": "v0.2.0"
+        "ref": "v0.3.0"
       },
       "description": "YAML-defined workflows triggered by Claude Code hooks — fmt, lint, test, and more."
     }
