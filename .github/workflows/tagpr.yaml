@@ -28,7 +28,7 @@ jobs:
         uses: Songmu/tagpr@b3fb89424646b06c8aa460f50307c60b6a541425 # v1
         if: ${{ github.event_name != 'workflow_dispatch' }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "20"
 
