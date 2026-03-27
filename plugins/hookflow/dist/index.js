@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 // src/index.ts
-import * as fs3 from "node:fs";
+import * as fs4 from "node:fs";
 import * as path6 from "node:path";
 
 // src/app.ts
 import { execSync } from "node:child_process";
+import * as fs3 from "node:fs";
 import * as path5 from "node:path";
 
 // src/hook-event.ts
@@ -36,6 +37,9 @@ function parseHookEvent(data) {
     tool_name: typeof raw.tool_name === "string" ? raw.tool_name : void 0,
     tool_input: toolInput,
     stop_hook_active: typeof raw.stop_hook_active === "boolean" ? raw.stop_hook_active : void 0,
+    agent_id: typeof raw.agent_id === "string" ? raw.agent_id : void 0,
+    agent_type: typeof raw.agent_type === "string" ? raw.agent_type : void 0,
+    agent_transcript_path: typeof raw.agent_transcript_path === "string" ? raw.agent_transcript_path : void 0,
     _raw: raw
   };
 }
@@ -48,12 +52,24 @@ function defaultStatePathResolver(event) {
   const dir = path.join(parsed.dir, parsed.name);
   return path.join(dir, "hookflow", "state.json");
 }
+function subagentStatePath(basePath, agentId) {
+  const dir = path.dirname(basePath);
+  const subDir = path.join(dir, "subagents");
+  const resolved = path.resolve(subDir, agentId, "state.json");
+  if (!resolved.startsWith(path.resolve(subDir) + path.sep)) {
+    throw new Error(`Invalid agent_id: path traversal detected`);
+  }
+  return resolved;
+}
+function subagentsDir(basePath) {
+  return path.join(path.dirname(basePath), "subagents");
+}
 function lastFailedRunPath(statePath) {
   return path.join(path.dirname(statePath), "last_failed_run.json");
 }
 function readState(event, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   try {
     const data = fs.readFileSync(statePath, "utf-8");
     return JSON.parse(data);
@@ -65,15 +81,15 @@ function readState(event, resolver) {
   }
 }
 function writeState(event, state, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   const dir = path.dirname(statePath);
   fs.mkdirSync(dir, { recursive: true, mode: 488 });
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", { mode: 384 });
 }
 function saveFailedRun(event, state, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   const failedPath = lastFailedRunPath(statePath);
   const dir = path.dirname(failedPath);
   fs.mkdirSync(dir, { recursive: true, mode: 488 });
@@ -81,8 +97,8 @@ function saveFailedRun(event, state, resolver) {
   return failedPath;
 }
 function readFailedRun(event, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   const failedPath = lastFailedRunPath(statePath);
   try {
     const data = fs.readFileSync(failedPath, "utf-8");
@@ -95,8 +111,8 @@ function readFailedRun(event, resolver) {
   }
 }
 function removeFailedRun(event, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   const failedPath = lastFailedRunPath(statePath);
   try {
     fs.unlinkSync(failedPath);
@@ -107,8 +123,8 @@ function removeFailedRun(event, resolver) {
   }
 }
 function removeState(event, resolver) {
-  const resolve3 = resolver ?? defaultStatePathResolver;
-  const statePath = resolve3(event);
+  const resolve4 = resolver ?? defaultStatePathResolver;
+  const statePath = resolve4(event);
   try {
     fs.unlinkSync(statePath);
   } catch (err) {
@@ -3821,8 +3837,8 @@ var path2 = {
   win32: { sep: "\\" },
   posix: { sep: "/" }
 };
-var sep = defaultPlatform === "win32" ? path2.win32.sep : path2.posix.sep;
-minimatch.sep = sep;
+var sep2 = defaultPlatform === "win32" ? path2.win32.sep : path2.posix.sep;
+minimatch.sep = sep2;
 var GLOBSTAR = Symbol("globstar **");
 minimatch.GLOBSTAR = GLOBSTAR;
 var qmark2 = "[^/]";
@@ -4631,6 +4647,7 @@ function parseWorkflowFile(filePath) {
       }
     }
   }
+  const agentType = toStringArray(raw.agent_type);
   return {
     name: raw.name,
     external_files: raw.external_files === true,
@@ -4639,6 +4656,7 @@ function parseWorkflowFile(filePath) {
     on,
     paths,
     paths_ignore: pathsIgnore,
+    agent_type: agentType.length > 0 ? agentType : void 0,
     jobs,
     _file: filePath
   };
@@ -4686,9 +4704,14 @@ function resolveFailureConfig(step, job, workflow) {
   const stop_reason = step.stop_reason ?? job.stop_reason ?? workflow.stop_reason;
   return { continue: cont, stop_reason };
 }
-function matchWorkflow(workflow, changedFiles, cwd, trigger) {
+function matchWorkflow(workflow, changedFiles, cwd, trigger, agentType) {
   if (trigger && !workflow.on.includes(trigger)) {
     return [];
+  }
+  if (workflow.agent_type) {
+    if (!agentType || !workflow.agent_type.includes(agentType)) {
+      return [];
+    }
   }
   const matched = [];
   for (const file of changedFiles) {
@@ -4848,6 +4871,10 @@ function resolveEachItems(each, ctx) {
       return ctx.state.changed_files;
     case "changed_dirs":
       return ctx.state.changed_dirs;
+    case "parent_changed_files":
+      return ctx.state.parent_changed_files ?? [];
+    case "parent_changed_dirs":
+      return ctx.state.parent_changed_dirs ?? [];
     default:
       return [];
   }
@@ -4890,6 +4917,11 @@ var App = class {
         return this.handleStop(event);
       case "TaskCompleted":
         return this.handleTaskCompleted(event);
+      case "SubagentStart":
+        this.handleSubagentStart(event);
+        return void 0;
+      case "SubagentStop":
+        return this.handleSubagentStop(event);
       case "SessionEnd":
         this.handleSessionEnd(event);
         return void 0;
@@ -4946,7 +4978,20 @@ var App = class {
     if (!filePath) {
       return;
     }
-    const state = this.loadOrCreateState(event);
+    const agentId = event.agent_id;
+    const resolver = agentId ? this.subagentStateResolver(agentId) : this.statePathResolver;
+    let state = null;
+    try {
+      state = readState(event, resolver);
+    } catch {
+      state = null;
+    }
+    if (!state) {
+      if (agentId) {
+        return;
+      }
+      state = { session_id: event.session_id, cwd: event.cwd, changed_files: [] };
+    }
     const cwd = state.cwd || event.cwd;
     let normalized = filePath;
     if (path5.isAbsolute(filePath) && cwd) {
@@ -4959,7 +5004,7 @@ var App = class {
       return;
     }
     state.changed_files.push(normalized);
-    writeState(event, state, this.statePathResolver);
+    writeState(event, state, resolver);
   }
   handleStop(event) {
     if (event.stop_hook_active) {
@@ -4970,10 +5015,42 @@ var App = class {
   handleTaskCompleted(event) {
     return this.runWorkflows(event, "TaskCompleted");
   }
-  runWorkflows(event, trigger) {
+  handleSubagentStart(event) {
+    const agentId = event.agent_id;
+    if (!agentId) return;
+    const mainState = this.loadOrCreateState(event);
+    const subState = {
+      session_id: event.session_id,
+      cwd: event.cwd,
+      changed_files: [],
+      parent_changed_files: [...mainState.changed_files],
+      agent_id: agentId,
+      agent_type: event.agent_type,
+      current_prompt: mainState.current_prompt
+    };
+    const resolver = this.subagentStateResolver(agentId);
+    writeState(event, subState, resolver);
+  }
+  handleSubagentStop(event) {
+    if (event.stop_hook_active) {
+      return void 0;
+    }
+    const agentId = event.agent_id;
+    if (!agentId) return void 0;
+    return this.runWorkflows(event, "SubagentStop", agentId);
+  }
+  subagentStateResolver(agentId) {
+    const baseResolver = this.statePathResolver ?? defaultStatePathResolver;
+    return (evt) => {
+      const basePath = baseResolver(evt);
+      return subagentStatePath(basePath, agentId);
+    };
+  }
+  runWorkflows(event, trigger, agentId) {
+    const resolver = agentId ? this.subagentStateResolver(agentId) : this.statePathResolver;
     let state = null;
     try {
-      state = readState(event, this.statePathResolver);
+      state = readState(event, resolver);
     } catch {
       return void 0;
     }
@@ -4989,9 +5066,10 @@ var App = class {
       );
       return void 0;
     }
+    const agentType = agentId ? state.agent_type ?? event.agent_type : void 0;
     const matched = /* @__PURE__ */ new Map();
     for (const w of workflows) {
-      const files = matchWorkflow(w, state.changed_files, cwd, trigger);
+      const files = matchWorkflow(w, state.changed_files, cwd, trigger, agentType);
       if (files.length > 0) {
         matched.set(w.name, { workflow: w, files });
       }
@@ -5017,6 +5095,7 @@ var App = class {
       };
       const matchedDirs = uniqueDirs(files);
       const changedDirs = uniqueDirs(state.changed_files);
+      const parentChangedDirs = state.parent_changed_files ? uniqueDirs(state.parent_changed_files) : void 0;
       const ctx = {
         state: {
           changed_files: state.changed_files,
@@ -5024,7 +5103,11 @@ var App = class {
           trigger,
           session_id: state.session_id,
           cwd,
-          prompt: state.current_prompt?.prompt ?? ""
+          prompt: state.current_prompt?.prompt ?? "",
+          agent_id: state.agent_id,
+          agent_type: state.agent_type,
+          parent_changed_files: state.parent_changed_files,
+          parent_changed_dirs: parentChangedDirs
         },
         workflow: { name },
         matched_files: files,
@@ -5057,7 +5140,7 @@ var App = class {
     }
     run.finished_at = (/* @__PURE__ */ new Date()).toISOString();
     state.last_run = run;
-    writeState(event, state, this.statePathResolver);
+    writeState(event, state, resolver);
     const workflowNames = [...matched.keys()].join(", ");
     process.stderr.write(
       `hookflow: executed ${matched.size} workflow(s): ${workflowNames}
@@ -5067,7 +5150,7 @@ var App = class {
     if (hasAnyFailure) {
       saveFailedRun(event, state, this.statePathResolver);
     }
-    return this.buildRunResult(event, run);
+    return this.buildRunResult(event, run, resolver);
   }
   executeJob(jobDef, workflow, cwd, ctx) {
     const startedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -5154,10 +5237,10 @@ var App = class {
     };
   }
   resolveStatePath(event) {
-    const resolve3 = this.statePathResolver ?? defaultStatePathResolver;
-    return resolve3(event);
+    const resolve4 = this.statePathResolver ?? defaultStatePathResolver;
+    return resolve4(event);
   }
-  buildRunResult(event, run) {
+  buildRunResult(event, run, stateResolver) {
     const failureLines = [];
     let hasBlockingFailure = false;
     for (const [wfName, wfExec] of Object.entries(run.workflows)) {
@@ -5188,8 +5271,8 @@ var App = class {
     if (failureLines.length === 0) {
       return void 0;
     }
-    const statePath = this.resolveStatePath(event);
-    failureLines.push(`See: ${statePath}`);
+    const resolve4 = stateResolver ?? this.statePathResolver ?? defaultStatePathResolver;
+    failureLines.push(`See: ${resolve4(event)}`);
     const message = failureLines.join("\n");
     if (!hasBlockingFailure) {
       return {
@@ -5198,7 +5281,7 @@ var App = class {
         stderr: message
       };
     }
-    if (run.trigger === "Stop") {
+    if (run.trigger === "Stop" || run.trigger === "SubagentStop") {
       return {
         exitCode: 0,
         stdout: JSON.stringify({ decision: "block", reason: message }),
@@ -5239,6 +5322,13 @@ var App = class {
   handleSessionEnd(event) {
     removeFailedRun(event, this.statePathResolver);
     removeState(event, this.statePathResolver);
+    const baseResolver = this.statePathResolver ?? defaultStatePathResolver;
+    const basePath = baseResolver(event);
+    const subDir = subagentsDir(basePath);
+    try {
+      fs3.rmSync(subDir, { recursive: true, force: true });
+    } catch {
+    }
   }
 };
 
@@ -5273,7 +5363,7 @@ function dumpInput(input) {
   }
   const dumpDir = path6.join(cwd, ".claude", "hooks_dump");
   try {
-    fs3.mkdirSync(dumpDir, { recursive: true, mode: 488 });
+    fs4.mkdirSync(dumpDir, { recursive: true, mode: 488 });
   } catch (err) {
     process.stderr.write(`hookflow: failed to create dump dir: ${err}
 `);
@@ -5288,7 +5378,7 @@ function dumpInput(input) {
   const filename = `dump_${formatTimestamp(/* @__PURE__ */ new Date())}.json`;
   const dumpPath = path6.join(dumpDir, filename);
   try {
-    fs3.writeFileSync(dumpPath, formatted + "\n", { mode: 384 });
+    fs4.writeFileSync(dumpPath, formatted + "\n", { mode: 384 });
   } catch (err) {
     process.stderr.write(`hookflow: failed to write dump: ${err}
 `);
