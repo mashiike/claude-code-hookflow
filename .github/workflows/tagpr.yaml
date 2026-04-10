@@ -25,7 +25,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
 
       - id: tagpr
-        uses: Songmu/tagpr@b3fb89424646b06c8aa460f50307c60b6a541425 # v1
+        uses: Songmu/tagpr@9d0f650553240dab1fa907eca27e3fd5b586e538 # v1
         if: ${{ github.event_name != 'workflow_dispatch' }}
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
